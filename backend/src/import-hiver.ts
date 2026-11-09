@@ -15,6 +15,8 @@ import {gmail,header,isInternal,parseAddress,sharedMailbox} from './gmail.js';
 
 const member=(process.argv[2]||'').toLowerCase();
 const apply=process.argv.includes('--apply');
+// --active-only: copy only conversations that are Open or Pending in Hiver (skips Hiver's closed history).
+const activeOnly=process.argv.includes('--active-only');
 if(!/^[^@\s]+@[^@\s]+$/.test(member))throw Error('usage: import-hiver.ts <member@domain> [--apply]');
 const mailbox=sharedMailbox();
 // Hiver's label for info@columbiabasininsurance.com is "Hiver-info-columbiabasininsurancecom".
@@ -36,7 +38,7 @@ function userFor(sub:string){
 }
 
 // What Hiver says, keyed by the member mailbox's thread id.
-type Want={assignee?:string|null;assigneeLabel?:string;status?:'open'|'pending'|'closed'};
+type Want={assignee?:string|null;assigneeLabel?:string;status?:'open'|'pending'|'closed';sharedAccount?:boolean};
 const want=new Map<string,Want>();
 const unmappedLabels:string[]=[];
 for(const l of labels){
@@ -45,6 +47,8 @@ for(const l of labels){
   let apply1:(w:Want)=>void;
   if(STATUS[key])apply1=w=>{w.status=STATUS[key]};
   else if(key==='unassigned')apply1=w=>{if(w.assignee===undefined)w.assignee=null};
+  // Assigned to the shared mailbox account itself (e.g. "info"): no person in Fredver, so unassigned.
+  else if(key===mailbox.split('@')[0])apply1=w=>{w.sharedAccount=true;if(w.assignee===undefined)w.assignee=null};
   else{const u=userFor(sub);if(!u){unmappedLabels.push(l.name);continue}apply1=w=>{w.assignee=u.id;w.assigneeLabel=sub}}
   let page:string|undefined;
   do{
@@ -53,7 +57,9 @@ for(const l of labels){
     page=r.nextPageToken;
   }while(page);
 }
-log({event:'hiver_threads',count:want.size,unmappedLabels});
+if(activeOnly)for(const [id,w] of want)if(w.status!=='open'&&w.status!=='pending')want.delete(id);
+const assignedToSharedAccount=[...want.values()].filter(w=>w.sharedAccount&&!w.assigneeLabel).length;
+log({event:'hiver_threads',activeOnly,count:want.size,assignedToSharedAccount,unmappedLabels:unmappedLabels.filter(n=>!/\/(sla|custom-fields|t-|following)/.test(n))});
 
 let matched=0,missing=0,created=0,changed=0,unchanged=0;
 const byAssignee:Record<string,number>={},byStatus:Record<string,number>={};
@@ -95,5 +101,5 @@ for(const [memberThreadId,w] of want){
     await pool.query(`INSERT INTO audit_events(thread_id,action,metadata) VALUES($1,'thread.imported',$2)`,[row.id,JSON.stringify({source:'hiver',assignee:newAssignee?name:null,status:newStatus})]);
   }
 }
-log({event:apply?'applied':'dry_run',hiverThreads:want.size,matched,notFoundInSharedMailbox:missing,addedToFredver:created,changed,alreadyMatching:unchanged,byAssignee,byStatus,unmappedLabels,samples});
+log({event:apply?'applied':'dry_run',activeOnly,assignedToSharedAccount,hiverThreads:want.size,matched,notFoundInSharedMailbox:missing,addedToFredver:created,changed,alreadyMatching:unchanged,byAssignee,byStatus,unmappedLabels,samples});
 await pool.end();
