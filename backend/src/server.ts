@@ -273,7 +273,7 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
     to:addrList.min(1),cc:addrList.default([]),bcc:addrList.default([]),body:z.string().trim().max(50000).default(''),bodyHtml:z.string().max(200000).optional(),
     status:z.enum(['open','pending','closed']).optional(),includeAttachments:z.boolean().default(true),signature:z.boolean().default(true),files:fileList}).parse(req.body);
   const uploads=decodeFiles(input.files);
-  const body=bodyOf(input);if(!body.text)return res.status(400).json({error:'Write a message first'});
+  const body=bodyOf(input);if(!body.text&&input.mode!=='forward')return res.status(400).json({error:'Write a message first'});
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   const mailbox=sharedMailbox();
   if(t.inbox_email.toLowerCase()!==mailbox)return res.status(409).json({error:'Inbox is not connected to Gmail'});

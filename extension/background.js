@@ -49,6 +49,33 @@ async function download(path){
   return {base64:btoa(bin),type:r.headers.get('Content-Type')||'application/octet-stream',name:decodeURIComponent(r.headers.get('X-Filename')||'attachment')};
 }
 
+// ---------- desktop notifications ----------
+// Every minute, check for new Fredver notifications (assigned, @mentioned, client replied, draft review)
+// and show them as Chrome notifications. Clicking one opens the conversation in Gmail.
+const TEXT={assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
+  reply:n=>`New reply from ${n.detail||'a client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
+async function pollNotifications(){
+  const {idToken}=await saved();if(!idToken)return;
+  let data;try{data=await api({path:'/api/notifications'})}catch{return}
+  const {lastNotified=0}=await chrome.storage.local.get('lastNotified');
+  const fresh=data.items.filter(n=>!n.read_at&&n.id>lastNotified).slice(0,5).reverse();
+  for(const n of fresh)chrome.notifications.create('fredver|'+n.id+'|'+(n.thread_id||''),{type:'basic',iconUrl:'icons/icon128.png',
+    title:(TEXT[n.kind]||TEXT.assigned)(n),message:(n.subject||'')+(n.kind==='mention'&&n.detail?'\n“'+n.detail.slice(0,120)+'”':''),priority:1});
+  const max=Math.max(lastNotified,...data.items.map(n=>n.id));
+  if(max>lastNotified)await chrome.storage.local.set({lastNotified:max});
+  chrome.action?.setBadgeText?.({text:data.unread?String(Math.min(data.unread,99)):''});
+}
+chrome.alarms.create('fredver-poll',{periodInMinutes:1});
+chrome.alarms.onAlarm.addListener(a=>{if(a.name==='fredver-poll')pollNotifications()});
+chrome.notifications.onClicked.addListener(async id=>{
+  const [,nid,threadId]=id.split('|');chrome.notifications.clear(id);
+  api({path:'/api/notifications/read',method:'POST',body:{ids:[Number(nid)]}}).catch(()=>{});
+  if(threadId)await chrome.storage.local.set({fredverOpen:{threadId,at:Date.now()}});
+  const tabs=await chrome.tabs.query({url:'https://mail.google.com/*'});
+  if(tabs[0]){await chrome.tabs.update(tabs[0].id,{active:true});await chrome.windows.update(tabs[0].windowId,{focused:true})}
+  else await chrome.tabs.create({url:'https://mail.google.com/mail/u/0/#inbox'});
+});
+
 chrome.runtime.onMessage.addListener((m,_sender,reply)=>{
   (async()=>{
     if(m.type==='status'){const {idToken,email}=await saved();return {signedIn:!!idToken,email}}
