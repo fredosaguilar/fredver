@@ -6,6 +6,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const run=promisify(execFile);
 import cors from 'cors';
+import {rateLimit} from 'express-rate-limit';
+import {cleanHtml,notify,notifyMentions,registerFeatures} from './features.js';
 import helmet from 'helmet';
 import {OAuth2Client} from 'google-auth-library';
 import {z} from 'zod';
@@ -15,8 +17,12 @@ import {gmail,GmailError,header,isInternal,messageParts,parseAddress,sharedMailb
 import {buildMime,clean,encodeHeader,escapeHtml,htmlToText,newMessageId,textToHtml} from './mime.js';
 
 const app=express();
+app.set('trust proxy',1); // Cloud Run's front end; needed for per-IP limits
 const google=new OAuth2Client(process.env.GOOGLE_OAUTH_CLIENT_ID);
 app.use(helmet());
+// Rate limits: per IP before sign-in (blunts token-guessing floods), per employee after.
+const limitJson=(msg:string)=>({standardHeaders:'draft-7' as const,legacyHeaders:false,message:{error:msg}});
+app.use('/api',rateLimit({windowMs:60_000,limit:600,...limitJson('Too many requests, slow down')}));
 app.use(cors({origin:process.env.ALLOWED_ORIGIN?.split(',')||false}));
 // Sending can carry attachments (base64 in JSON); everything else stays small.
 app.use(['/api/threads/:id/send','/api/inboxes/:id/compose'],express.json({limit:'30mb'}));
@@ -63,6 +69,8 @@ app.use('/api',async(req,res,next)=>{
     req.actor=rows[0];next();
   }catch(e){next(e)}
 });
+app.use('/api',rateLimit({windowMs:60_000,limit:300,keyGenerator:(req:any)=>req.actor?.id||req.ip,...limitJson('Too many requests, slow down')}));
+app.use(['/api/threads/:id/send','/api/inboxes/:id/compose'],rateLimit({windowMs:60_000,limit:20,keyGenerator:(req:any)=>req.actor?.id||req.ip,...limitJson('Sending too fast; wait a minute')}));
 const wrap=(fn:any)=>(req:any,res:any,next:any)=>Promise.resolve(fn(req,res,next)).catch(next);
 const audit=(actor:string|null,thread:string,action:string,metadata:any={})=>pool.query('INSERT INTO audit_events(actor_id,thread_id,action,metadata) VALUES($1,$2,$3,$4)',[actor,thread,action,JSON.stringify(metadata)]);
 
@@ -102,30 +110,42 @@ app.get('/api/inboxes/:id/counts',wrap(async(req:any,res:any)=>{
     count(*) FILTER (WHERE status='open')::int open,
     count(*) FILTER (WHERE status='pending')::int pending,
     count(*) FILTER (WHERE status='closed')::int closed,
-    count(*)::int "all"
+    count(*)::int "all",
+    count(*) FILTER (WHERE status='open' AND awaiting_reply AND last_client_message_at < now()-make_interval(hours=>(SELECT sla_hours FROM inboxes WHERE id=$1)))::int overdue
     FROM threads WHERE inbox_id=$1`,[req.params.id,req.actor.id]);
   const team=await pool.query(`SELECT assignee_id,count(*)::int n FROM threads WHERE inbox_id=$1 AND assignee_id IS NOT NULL AND status<>'closed' GROUP BY assignee_id`,[req.params.id]);
   res.json({...rows[0],byAssignee:Object.fromEntries(team.rows.map(r=>[r.assignee_id,r.n]))});
 }));
 
-const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent'] as const;
+const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent','overdue','tag','search'] as const;
 app.get('/api/threads',wrap(async(req:any,res:any)=>{
-  const input=z.object({inboxId:z.string().uuid(),view:z.enum(VIEWS).default('all'),assigneeId:z.string().uuid().optional(),q:z.string().trim().max(200).optional()}).parse(req.query);
+  const input=z.object({inboxId:z.string().uuid(),view:z.enum(VIEWS).default('all'),assigneeId:z.string().uuid().optional(),tagId:z.string().uuid().optional(),
+    ids:z.string().max(2000).optional(),q:z.string().trim().max(200).optional()}).parse(req.query);
+  const ids=(input.ids||'').split(',').filter(x=>/^[0-9a-f]{6,32}$/i.test(x)).slice(0,50);
   if(input.view==='assignee'&&!input.assigneeId)return res.status(400).json({error:'assigneeId required'});
   const q=input.q?'%'+input.q.replace(/[\\%_]/g,m=>'\\'+m)+'%':null;
   const {rows}=await pool.query(`SELECT t.id,t.subject,t.status,t.assignee_id,t.from_name,t.from_email,t.snippet,t.last_message_at,t.message_count,t.updated_at,
       u.display_name AS assignee_name,u.email AS assignee_email,
-      (SELECT count(*) FROM notes n WHERE n.thread_id=t.id)::int AS note_count,s.sent_at,s.sent_by
-    FROM threads t JOIN inbox_members m ON m.inbox_id=t.inbox_id AND m.user_id=$1 LEFT JOIN users u ON u.id=t.assignee_id
+      (SELECT count(*) FROM notes n WHERE n.thread_id=t.id)::int AS note_count,s.sent_at,s.sent_by,
+      t.awaiting_reply,t.last_client_message_at,i.sla_hours,
+      (t.last_message_at > greatest(coalesce(r.read_at,'-infinity'::timestamptz),me.read_baseline)) AS unread,
+      coalesce((SELECT json_agg(json_build_object('id',g.id,'name',g.name,'color',g.color) ORDER BY g.name) FROM thread_tags x JOIN tags g ON g.id=x.tag_id WHERE x.thread_id=t.id),'[]') AS tags,
+      (SELECT du.display_name FROM drafts d JOIN users du ON du.id=d.updated_by WHERE d.thread_id=t.id) AS draft_by
+    FROM threads t JOIN inbox_members m ON m.inbox_id=t.inbox_id AND m.user_id=$1 JOIN inboxes i ON i.id=t.inbox_id JOIN users me ON me.id=$1
+    LEFT JOIN thread_reads r ON r.thread_id=t.id AND r.user_id=$1 LEFT JOIN users u ON u.id=t.assignee_id
     LEFT JOIN LATERAL (SELECT a.created_at AS sent_at,su.display_name AS sent_by FROM audit_events a JOIN users su ON su.id=a.actor_id
       WHERE a.thread_id=t.id AND a.action IN ('reply.sent','forward.sent','compose.sent') ORDER BY a.created_at DESC LIMIT 1) s ON true
     WHERE t.inbox_id=$2 AND (
       $3::text='all' OR ($3::text='unassigned' AND t.assignee_id IS NULL AND t.status<>'closed')
       OR ($3::text='mine' AND t.assignee_id=$1 AND t.status<>'closed')
       OR ($3::text='assignee' AND t.assignee_id=$5::uuid AND t.status<>'closed')
-      OR ($3::text='sent' AND s.sent_at IS NOT NULL) OR t.status=$3::text)
+      OR ($3::text='sent' AND s.sent_at IS NOT NULL) OR t.status=$3::text
+      OR ($3::text='overdue' AND t.status='open' AND t.awaiting_reply AND t.last_client_message_at < now()-make_interval(hours=>i.sla_hours))
+      OR ($3::text='tag' AND EXISTS(SELECT 1 FROM thread_tags x WHERE x.thread_id=t.id AND x.tag_id=$6::uuid))
+      OR ($3::text='search' AND t.gmail_thread_id=ANY($7::text[])))
     AND ($4::text IS NULL OR t.subject ILIKE $4 OR t.from_email ILIKE $4 OR t.from_name ILIKE $4 OR t.snippet ILIKE $4)
-    ORDER BY CASE WHEN $3::text='sent' THEN s.sent_at END DESC NULLS LAST,t.last_message_at DESC NULLS LAST,t.updated_at DESC LIMIT 200`,[req.actor.id,input.inboxId,input.view,q,input.assigneeId??null]);
+    ORDER BY CASE WHEN $3::text='sent' THEN s.sent_at END DESC NULLS LAST,CASE WHEN $3::text='overdue' THEN t.last_client_message_at END ASC,t.last_message_at DESC NULLS LAST,t.updated_at DESC LIMIT 200`,
+    [req.actor.id,input.inboxId,input.view,q,input.assigneeId??null,input.tagId??null,ids]);
   res.json(rows);
 }));
 
@@ -146,9 +166,16 @@ app.get('/api/threads/:id',wrap(async(req:any,res:any)=>{
     pool.query(`SELECT a.action,a.metadata,a.created_at,u.display_name FROM audit_events a LEFT JOIN users u ON u.id=a.actor_id WHERE a.thread_id=$1 AND a.action<>'note.created' ORDER BY a.created_at DESC LIMIT 50`,[t.id]),
     pool.query('SELECT u.id,u.display_name FROM users u WHERE u.id=$1',[t.assignee_id]),
     pool.query(`SELECT a.metadata->>'messageId' AS id,a.metadata->>'rfcMessageId' AS rfc,u.display_name FROM audit_events a JOIN users u ON u.id=a.actor_id WHERE a.thread_id=$1 AND a.action IN ('reply.sent','forward.sent','compose.sent')`,[t.id])]);
+  const [tags,draft,sla]=await Promise.all([
+    pool.query('SELECT g.id,g.name,g.color FROM thread_tags x JOIN tags g ON g.id=x.tag_id WHERE x.thread_id=$1 ORDER BY g.name',[t.id]),
+    pool.query(`SELECT d.mode,d.from_addr,d.to_addrs,d.cc_addrs,d.bcc_addrs,d.body_html,d.updated_at,a.display_name AS author,b.display_name AS updated_by
+      FROM drafts d JOIN users a ON a.id=d.author_id JOIN users b ON b.id=d.updated_by WHERE d.thread_id=$1`,[t.id]),
+    pool.query('SELECT sla_hours FROM inboxes WHERE id=$1',[t.inbox_id])]);
+  await pool.query('INSERT INTO thread_reads(user_id,thread_id,read_at) VALUES($1,$2,now()) ON CONFLICT(user_id,thread_id) DO UPDATE SET read_at=now()',[req.actor.id,t.id]);
+  await pool.query(`UPDATE notifications SET read_at=now() WHERE user_id=$1 AND thread_id=$2 AND read_at IS NULL`,[req.actor.id,t.id]);
   await pool.query(`INSERT INTO presence(thread_id,user_id,activity,seen_at) VALUES($1,$2,'viewing',now()) ON CONFLICT(thread_id,user_id) DO UPDATE SET activity='viewing',seen_at=now()`,[t.id,req.actor.id]);
   const {inbox_email,inbox_name,gmail_history_id,...thread}=t;
-  res.json({thread:{...thread,assignee_name:members.rows[0]?.display_name||null,inbox_email,inbox_name},messages,sentBy:Object.fromEntries(senders.rows.flatMap(r=>[[r.id,r.display_name],[r.rfc,r.display_name]]).filter(([k])=>k)),notes:notes.rows,activity:activity.rows,viewers:await viewers(t.id,req.actor.id)});
+  res.json({thread:{...thread,assignee_name:members.rows[0]?.display_name||null,inbox_email,inbox_name,sla_hours:sla.rows[0]?.sla_hours},tags:tags.rows,draft:draft.rows[0]||null,messages,sentBy:Object.fromEntries(senders.rows.flatMap(r=>[[r.id,r.display_name],[r.rfc,r.display_name]]).filter(([k])=>k)),notes:notes.rows,activity:activity.rows,viewers:await viewers(t.id,req.actor.id)});
 }));
 
 // Fetch one attachment from a message in a conversation the user can see.
@@ -201,7 +228,10 @@ app.patch('/api/threads/:id',wrap(async(req:any,res:any)=>{
   const hasAssignee=Object.prototype.hasOwnProperty.call(input,'assigneeId');
   const {rows}=await pool.query('UPDATE threads SET status=COALESCE($1,status),assignee_id=CASE WHEN $2 THEN $3::uuid ELSE assignee_id END,updated_at=now() WHERE id=$4 RETURNING id,status,assignee_id',[input.status??null,hasAssignee,input.assigneeId??null,t.id]);
   if(input.status&&input.status!==t.status)await audit(req.actor.id,t.id,'thread.status',{from:t.status,to:input.status});
-  if(hasAssignee&&(input.assigneeId??null)!==t.assignee_id)await audit(req.actor.id,t.id,'thread.assigned',{to:assigneeName});
+  if(hasAssignee&&(input.assigneeId??null)!==t.assignee_id){
+    await audit(req.actor.id,t.id,'thread.assigned',{to:assigneeName});
+    await notify(input.assigneeId,t.id,'assigned',req.actor.id,t.subject);
+  }
   res.json(rows[0]);
 }));
 
@@ -210,6 +240,7 @@ app.post('/api/threads/:id/notes',wrap(async(req:any,res:any)=>{
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   const {rows}=await pool.query('INSERT INTO notes(thread_id,author_id,body) VALUES($1,$2,$3) RETURNING id,body,created_at',[t.id,req.actor.id,body]);
   await audit(req.actor.id,t.id,'note.created');
+  await notifyMentions(body,t.id,t.inbox_id,req.actor);
   res.status(201).json({...rows[0],display_name:req.actor.display_name,email:req.actor.email});
 }));
 
@@ -223,6 +254,11 @@ function decodeFiles(files:{filename?:string;mimeType?:string;data?:string}[]){
   if(out.reduce((n,f)=>n+f.data.length,0)>MAX_UPLOAD)throw new GmailError('Attachments are over the 20 MB limit.',413);
   return out;
 }
+// Message body: formatted HTML from the editor (cleaned) with a plain-text twin, or plain text.
+function bodyOf(i:{body?:string;bodyHtml?:string}){
+  if(i.bodyHtml){const html=cleanHtml(i.bodyHtml);return {html,text:htmlToText(html)}}
+  const text=(i.body||'').trim();return {html:textToHtml(text),text};
+}
 const fromHeader=(name:string,email:string)=>`${encodeHeader(clean(name||''))} <${email}>`.trim();
 async function send(raw:string,opts:{as?:string;threadId?:string}){
   try{return await sendRaw(raw,opts)}
@@ -234,9 +270,10 @@ async function send(raw:string,opts:{as?:string;threadId?:string}){
 // mailbox, so the message still lands in the shared conversation for the team.
 app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
   const input=z.object({mode:z.enum(['reply','replyAll','forward']),from:z.enum(['shared','me']).default('shared'),
-    to:addrList.min(1),cc:addrList.default([]),bcc:addrList.default([]),body:z.string().trim().min(1).max(50000),
+    to:addrList.min(1),cc:addrList.default([]),bcc:addrList.default([]),body:z.string().trim().max(50000).default(''),bodyHtml:z.string().max(200000).optional(),
     status:z.enum(['open','pending','closed']).optional(),includeAttachments:z.boolean().default(true),signature:z.boolean().default(true),files:fileList}).parse(req.body);
   const uploads=decodeFiles(input.files);
+  const body=bodyOf(input);if(!body.text)return res.status(400).json({error:'Write a message first'});
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   const mailbox=sharedMailbox();
   if(t.inbox_email.toLowerCase()!==mailbox)return res.status(409).json({error:'Inbox is not connected to Gmail'});
@@ -254,10 +291,10 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
   const meta=`From: ${header(target,'From')}\nDate: ${date}\nSubject: ${header(target,'Subject')}\nTo: ${header(target,'To')}${header(target,'Cc')?'\nCc: '+header(target,'Cc'):''}`;
   const sigText=signature.text?`\n\n-- \n${signature.text}`:'';
   const text=fwd
-    ?`${input.body}${sigText}\n\n---------- Forwarded message ---------\n${meta}\n\n${original}`
-    :`${input.body}${sigText}\n\nOn ${date}, ${header(target,'From')} wrote:\n${original.split('\n').map(l=>'> '+l).join('\n')}`;
+    ?`${body.text}${sigText}\n\n---------- Forwarded message ---------\n${meta}\n\n${original}`
+    :`${body.text}${sigText}\n\nOn ${date}, ${header(target,'From')} wrote:\n${original.split('\n').map(l=>'> '+l).join('\n')}`;
   const sigHtml=signature.html?`<br><div class="gmail_signature">${signature.html}</div>`:'';
-  const html=`<div dir="ltr">${textToHtml(input.body)}</div>${sigHtml}<br>`+(fwd
+  const html=`<div dir="ltr">${body.html}</div>${sigHtml}<br>`+(fwd
     ?`<div class="gmail_quote">---------- Forwarded message ---------<br>${textToHtml(meta)}<br><br>${origHtml}</div>`
     :`<div class="gmail_quote"><div dir="ltr">On ${escapeHtml(date)}, ${escapeHtml(header(target,'From'))} wrote:</div><blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">${origHtml}</blockquote></div>`);
   let attachments:{filename:string;mimeType:string;data:Buffer}[]=[];
@@ -278,7 +315,9 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
     inReplyTo:msgId||undefined,references:[header(target,'References'),msgId].filter(Boolean).join(' ')||undefined,text,html,attachments:[...attachments,...uploads]});
   const sent=await send(raw,me?{as:req.actor.email}:{threadId:t.gmail_thread_id});
   await audit(req.actor.id,t.id,fwd?'forward.sent':'reply.sent',{messageId:sent.id,rfcMessageId:rfcId,from:me?req.actor.email:mailbox,mode:input.mode,to:input.to,cc:input.cc});
-  await pool.query(`UPDATE threads SET status=COALESCE($1,status),updated_at=now(),last_message_at=now(),gmail_history_id=NULL WHERE id=$2`,[input.status??null,t.id]);
+  await pool.query(`UPDATE threads SET status=COALESCE($1,status),updated_at=now(),last_message_at=now(),awaiting_reply=false,gmail_history_id=NULL WHERE id=$2`,[input.status??null,t.id]);
+  await pool.query('DELETE FROM drafts WHERE thread_id=$1',[t.id]);
+  await pool.query('INSERT INTO thread_reads(user_id,thread_id,read_at) VALUES($1,$2,now()) ON CONFLICT(user_id,thread_id) DO UPDATE SET read_at=now()',[req.actor.id,t.id]);
   if(input.status&&input.status!==t.status)await audit(req.actor.id,t.id,'thread.status',{from:t.status,to:input.status});
   await pool.query('DELETE FROM presence WHERE thread_id=$1 AND user_id=$2',[t.id,req.actor.id]);
   res.json({id:sent.id});
@@ -288,8 +327,9 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
 // mailbox). The sender is assigned automatically.
 app.post('/api/inboxes/:id/compose',wrap(async(req:any,res:any)=>{
   const input=z.object({from:z.enum(['shared','me']).default('shared'),to:addrList.min(1),cc:addrList.default([]),bcc:addrList.default([]),
-    subject:z.string().trim().min(1).max(500),body:z.string().trim().min(1).max(50000),signature:z.boolean().default(true),files:fileList}).parse(req.body);
+    subject:z.string().trim().min(1).max(500),body:z.string().trim().max(50000).default(''),bodyHtml:z.string().max(200000).optional(),signature:z.boolean().default(true),files:fileList}).parse(req.body);
   const uploads=decodeFiles(input.files);
+  const body=bodyOf(input);if(!body.text)return res.status(400).json({error:'Write a message first'});
   if(!z.string().uuid().safeParse(req.params.id).success||!await isMember(req.params.id,req.actor.id))return res.sendStatus(404);
   const inbox=(await pool.query('SELECT id,email,name FROM inboxes WHERE id=$1',[req.params.id])).rows[0];
   const mailbox=sharedMailbox();
@@ -299,8 +339,8 @@ app.post('/api/inboxes/:id/compose',wrap(async(req:any,res:any)=>{
   const rfcId=newMessageId(process.env.ALLOWED_DOMAIN||'mail.local');
   const signature=await sig(req.actor.email,input.signature);
   const raw=buildMime({from:me?fromHeader(req.actor.display_name,req.actor.email):fromHeader(inbox.name,mailbox),to:input.to,cc:input.cc,bcc,
-    subject:input.subject,messageId:rfcId,text:input.body+(signature.text?`\n\n-- \n${signature.text}`:''),
-    html:`<div dir="ltr">${textToHtml(input.body)}</div>`+(signature.html?`<br><div class="gmail_signature">${signature.html}</div>`:''),attachments:uploads});
+    subject:input.subject,messageId:rfcId,text:body.text+(signature.text?`\n\n-- \n${signature.text}`:''),
+    html:`<div dir="ltr">${body.html}</div>`+(signature.html?`<br><div class="gmail_signature">${signature.html}</div>`:''),attachments:uploads});
   const sent=await send(raw,me?{as:req.actor.email}:{});
   // From the shared mailbox the Gmail thread id is known now; from "me" the copy reaches the shared
   // mailbox via Bcc and the next sync picks it up, so look it up by Message-ID.
@@ -310,10 +350,12 @@ app.post('/api/inboxes/:id/compose',wrap(async(req:any,res:any)=>{
   if(!threadId)return res.status(202).json({pending:true});
   const {rows}=await pool.query(`INSERT INTO threads(inbox_id,gmail_thread_id,subject,from_name,from_email,snippet,last_message_at,message_count,status,assignee_id)
     VALUES($1,$2,$3,'',$4,$5,now(),1,'open',$6) ON CONFLICT(inbox_id,gmail_thread_id) DO UPDATE SET updated_at=now(),assignee_id=COALESCE(threads.assignee_id,EXCLUDED.assignee_id) RETURNING id`,
-    [inbox.id,threadId,input.subject,input.to[0],input.body.slice(0,300),req.actor.id]);
+    [inbox.id,threadId,input.subject,input.to[0],body.text.slice(0,300),req.actor.id]);
   await audit(req.actor.id,rows[0].id,'compose.sent',{messageId:sent.id,rfcMessageId:rfcId,from:me?req.actor.email:mailbox,to:input.to,cc:input.cc});
   res.status(201).json({id:rows[0].id});
 }));
+
+registerFeatures(app,{authorizedThread,audit});
 
 app.post('/api/admin/sync',wrap(async(req:any,res:any)=>{
   if(req.actor.role!=='admin')return res.sendStatus(403);

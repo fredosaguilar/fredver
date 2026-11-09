@@ -13,7 +13,7 @@ export async function syncInbox({maxThreads=100}:{maxThreads?:number}={}){
     const data=await gmail('threads?labelIds=INBOX&maxResults='+Math.min(100,maxThreads-scanned)+(page?'&pageToken='+encodeURIComponent(page):''));
     for(const t of data.threads||[]){
       scanned++;
-      const prev=(await pool.query('SELECT id,status,message_count,gmail_history_id FROM threads WHERE inbox_id=$1 AND gmail_thread_id=$2',[inboxId,t.id])).rows[0];
+      const prev=(await pool.query('SELECT id,status,message_count,gmail_history_id,assignee_id FROM threads WHERE inbox_id=$1 AND gmail_thread_id=$2',[inboxId,t.id])).rows[0];
       if(prev&&prev.gmail_history_id===t.historyId)continue;
       const full=await gmail('threads/'+encodeURIComponent(t.id)+'?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date');
       const msgs=full.messages||[];const first=msgs[0];const last=msgs.at(-1);
@@ -23,6 +23,9 @@ export async function syncInbox({maxThreads=100}:{maxThreads?:number}={}){
       const from=parseAddress(header(external,'From'));
       const lastFromUs=isInternal(parseAddress(header(last,'From')).email);
       const lastAt=last?.internalDate?new Date(Number(last.internalDate)):null;
+      const firstAt=first?.internalDate?new Date(Number(first.internalDate)):null;
+      const lastClient=[...msgs].reverse().find((m:any)=>!isInternal(parseAddress(header(m,'From')).email));
+      const lastClientAt=lastClient?.internalDate?new Date(Number(lastClient.internalDate)):null;
       const client=await pool.connect();
       try{
         await client.query('BEGIN');
@@ -32,6 +35,11 @@ export async function syncInbox({maxThreads=100}:{maxThreads?:number}={}){
             snippet=EXCLUDED.snippet,last_message_at=EXCLUDED.last_message_at,message_count=EXCLUDED.message_count,gmail_history_id=EXCLUDED.gmail_history_id
           RETURNING id`,[inboxId,t.id,subject,from.name,from.email,(last?.snippet||'').slice(0,300),lastAt,msgs.length,t.historyId]);
         const id=saved.rows[0].id;
+        // SLA/report fields: who spoke last, and when the client last wrote.
+        await client.query('UPDATE threads SET first_message_at=$1,last_client_message_at=$2,awaiting_reply=$3 WHERE id=$4',[firstAt,lastClientAt,!lastFromUs,id]);
+        // New client message on an assigned conversation: tell the assignee.
+        if(prev&&prev.assignee_id&&!lastFromUs&&msgs.length>prev.message_count&&prev.message_count>0)
+          await client.query(`INSERT INTO notifications(user_id,thread_id,kind,detail) VALUES($1,$2,'reply',$3)`,[prev.assignee_id,id,(from.name||from.email).slice(0,120)]);
         // A client replying to a closed conversation reopens it.
         if(prev&&prev.status==='closed'&&!lastFromUs&&msgs.length>prev.message_count&&prev.message_count>0){
           await client.query(`UPDATE threads SET status='open',updated_at=now() WHERE id=$1`,[id]);
