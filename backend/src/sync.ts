@@ -29,11 +29,14 @@ export async function syncInbox({maxThreads=100}:{maxThreads?:number}={}){
       const client=await pool.connect();
       try{
         await client.query('BEGIN');
-        const saved=await client.query(`INSERT INTO threads(inbox_id,gmail_thread_id,subject,from_name,from_email,snippet,last_message_at,message_count,gmail_history_id)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        // A conversation seen for the first time that has been quiet for over a week is old mail, not new
+        // work: add it as Closed. (Status on existing rows is never changed by this insert.)
+        const firstSeenStatus=lastAt&&Date.now()-lastAt.getTime()>7*864e5?'closed':'open';
+        const saved=await client.query(`INSERT INTO threads(inbox_id,gmail_thread_id,subject,from_name,from_email,snippet,last_message_at,message_count,gmail_history_id,status)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
           ON CONFLICT(inbox_id,gmail_thread_id) DO UPDATE SET subject=EXCLUDED.subject,from_name=EXCLUDED.from_name,from_email=EXCLUDED.from_email,
             snippet=EXCLUDED.snippet,last_message_at=EXCLUDED.last_message_at,message_count=EXCLUDED.message_count,gmail_history_id=EXCLUDED.gmail_history_id
-          RETURNING id`,[inboxId,t.id,subject,from.name,from.email,(last?.snippet||'').slice(0,300),lastAt,msgs.length,t.historyId]);
+          RETURNING id`,[inboxId,t.id,subject,from.name,from.email,(last?.snippet||'').slice(0,300),lastAt,msgs.length,t.historyId,firstSeenStatus]);
         const id=saved.rows[0].id;
         // SLA/report fields: who spoke last, and when the client last wrote.
         await client.query('UPDATE threads SET first_message_at=$1,last_client_message_at=$2,awaiting_reply=$3 WHERE id=$4',[firstAt,lastClientAt,!lastFromUs,id]);
