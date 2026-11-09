@@ -17,6 +17,11 @@ const member=(process.argv[2]||'').toLowerCase();
 const apply=process.argv.includes('--apply');
 // --active-only: copy only conversations that are Open or Pending in Hiver (skips Hiver's closed history).
 const activeOnly=process.argv.includes('--active-only');
+// --close-others (with --active-only): close every other open/pending Fredver conversation, so only what is
+// open in Hiver stays open. Conversations with a message in the last 24 hours are left alone (Hiver may not
+// have labeled them yet).
+const closeOthers=process.argv.includes('--close-others');
+if(closeOthers&&!activeOnly)throw Error('--close-others requires --active-only');
 if(!/^[^@\s]+@[^@\s]+$/.test(member))throw Error('usage: import-hiver.ts <member@domain> [--apply]');
 const mailbox=sharedMailbox();
 // Hiver's label for info@columbiabasininsurance.com is "Hiver-info-columbiabasininsurancecom".
@@ -62,6 +67,7 @@ const assignedToSharedAccount=[...want.values()].filter(w=>w.sharedAccount&&!w.a
 log({event:'hiver_threads',activeOnly,count:want.size,assignedToSharedAccount,unmappedLabels:unmappedLabels.filter(n=>!/\/(sla|custom-fields|t-|following)/.test(n))});
 
 let matched=0,missing=0,created=0,changed=0,unchanged=0;
+const keepOpen=new Set<string>();
 const byAssignee:Record<string,number>={},byStatus:Record<string,number>={};
 const samples:any[]=[];
 for(const [memberThreadId,w] of want){
@@ -73,7 +79,7 @@ for(const [memberThreadId,w] of want){
     if(f.messages?.[0]){sharedThreadId=f.messages[0].threadId;break}
   }
   if(!sharedThreadId){missing++;continue}
-  matched++;
+  matched++;keepOpen.add(sharedThreadId);
   let row=(await pool.query('SELECT id,status,assignee_id,subject FROM threads WHERE inbox_id=$1 AND gmail_thread_id=$2',[inbox.id,sharedThreadId])).rows[0];
   if(!row){
     // Conversation older than Fredver's sync window: add it so the import can apply.
@@ -102,4 +108,16 @@ for(const [memberThreadId,w] of want){
   }
 }
 log({event:apply?'applied':'dry_run',activeOnly,assignedToSharedAccount,hiverThreads:want.size,matched,notFoundInSharedMailbox:missing,addedToFredver:created,changed,alreadyMatching:unchanged,byAssignee,byStatus,unmappedLabels,samples});
+if(closeOthers){
+  const where=`inbox_id=$1 AND status<>'closed' AND NOT (gmail_thread_id = ANY($2::text[])) AND (last_message_at IS NULL OR last_message_at < now()-interval '24 hours')`;
+  const recent=(await pool.query(`SELECT count(*)::int n FROM threads WHERE inbox_id=$1 AND status<>'closed' AND NOT (gmail_thread_id = ANY($2::text[])) AND last_message_at >= now()-interval '24 hours'`,[inbox.id,[...keepOpen]])).rows[0].n;
+  let closed=0;
+  if(apply){
+    const r=await pool.query(`UPDATE threads SET status='closed',updated_at=now() WHERE ${where} RETURNING id`,[inbox.id,[...keepOpen]]);
+    closed=r.rowCount||0;
+    for(const row of r.rows)await pool.query(`INSERT INTO audit_events(thread_id,action,metadata) VALUES($1,'thread.imported',$2)`,[row.id,JSON.stringify({source:'hiver',status:'closed',reason:'not open in Hiver'})]);
+  }else closed=(await pool.query(`SELECT count(*)::int n FROM threads WHERE ${where}`,[inbox.id,[...keepOpen]])).rows[0].n;
+  const left=(await pool.query(`SELECT status,count(*)::int n FROM threads WHERE inbox_id=$1 AND status<>'closed' GROUP BY status`,[inbox.id])).rows;
+  log({event:apply?'closed_others':'would_close_others',count:closed,keptOpenRecent24h:recent,openAfter:apply?left:undefined});
+}
 await pool.end();
