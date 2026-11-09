@@ -14,7 +14,8 @@ The backend reads and sends mail for **info@columbiabasininsurance.com**.
 | DB password | Secret Manager | `cbi-mail-database-url` |
 | Container images | Artifact Registry | `us-west1-docker.pkg.dev/cbi-mail-pilot/cbi-mail/api` |
 | Identities | Service accounts | `cbi-mail-api` (backend), `cbi-mail-gmail` (Gmail delegation, keyless), `cbi-mail-build`, `cbi-mail-scheduler`, `cbi-mail-pubsub` |
-| Sign-in client | Google Auth Platform | "CBI Mail Extension", redirect `https://bjfbogaphibnglkajlalhajhlbeflpdf.chromiumapp.org/oauth` |
+| Chrome Web Store item | Private to columbiabasininsurance.com, force-installed from Admin Console | `oaappehaeobmmmdjalpmfdpjeoifanii` |
+| Sign-in client | Google Auth Platform | "CBI Mail Extension", redirects `https://oaappehaeobmmmdjalpmfdpjeoifanii.chromiumapp.org/oauth` (store) and `https://bjfbogaphibnglkajlalhajhlbeflpdf.chromiumapp.org/oauth` (unpacked dev copy) |
 | Gmail permission | Admin Console → Domain-wide delegation | client ID `116406524663315383692`, scopes `gmail.readonly`, `gmail.send` |
 
 The extension ID (`bjfbogaphibnglkajlalhajhlbeflpdf`) is fixed by the `key` in `extension/manifest.json`. Don't remove it, or sign-in breaks.
