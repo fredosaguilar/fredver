@@ -17,12 +17,14 @@ const member=(process.argv[2]||'').toLowerCase();
 const apply=process.argv.includes('--apply');
 if(!/^[^@\s]+@[^@\s]+$/.test(member))throw Error('usage: import-hiver.ts <member@domain> [--apply]');
 const mailbox=sharedMailbox();
-const PREFIX='hiver-'+mailbox.replace(/[@.]/g,'')+'/';
+// Hiver's label for info@columbiabasininsurance.com is "Hiver-info-columbiabasininsurancecom".
+const PREFIX='hiver-'+mailbox.replace('@','-').replace(/\./g,'')+'/';
 const STATUS:Record<string,'open'|'pending'|'closed'>={open:'open',pending:'pending',closed:'closed'};
 
 const log=(o:any)=>console.log('HIVER '+JSON.stringify(o));
 const labels=((await gmail('labels',{as:member})).labels||[]).filter((l:any)=>l.name.toLowerCase().startsWith(PREFIX));
-log({event:'labels',names:labels.map((l:any)=>l.name)});
+log({event:'labels',prefix:PREFIX,names:labels.map((l:any)=>l.name)});
+if(!labels.length)log({event:'all_hiver_labels',names:((await gmail('labels',{as:member})).labels||[]).map((l:any)=>l.name).filter((n:string)=>/hiver/i.test(n))});
 
 const inbox=(await pool.query('SELECT id FROM inboxes WHERE lower(email)=$1',[mailbox])).rows[0];
 if(!inbox)throw Error('shared inbox not provisioned');
