@@ -239,6 +239,46 @@ app.patch('/api/threads/:id',wrap(async(req:any,res:any)=>{
   res.json(rows[0]);
 }));
 
+// Bulk actions on several conversations at once (assign, status, tag, read/unread).
+app.post('/api/threads/bulk',wrap(async(req:any,res:any)=>{
+  const input=z.object({ids:z.array(z.string().uuid()).min(1).max(200),status:z.enum(['open','pending','closed']).optional(),
+    assigneeId:z.string().uuid().nullable().optional(),tagId:z.string().uuid().optional(),read:z.boolean().optional()})
+    .refine(v=>v.status!==undefined||v.assigneeId!==undefined||v.tagId!==undefined||v.read!==undefined,'Choose an action').parse(req.body);
+  const threads=(await Promise.all([...new Set(input.ids)].map(id=>authorizedThread(id,req.actor)))).filter(Boolean);
+  if(!threads.length)return res.sendStatus(404);
+  const inboxId=threads[0].inbox_id;
+  if(threads.some(t=>t.inbox_id!==inboxId))return res.status(400).json({error:'Conversations are in different inboxes'});
+  let assigneeName:string|null=null;
+  if(input.assigneeId){
+    const {rows}=await pool.query('SELECT u.display_name FROM inbox_members m JOIN users u ON u.id=m.user_id WHERE m.inbox_id=$1 AND m.user_id=$2 AND u.active',[inboxId,input.assigneeId]);
+    if(!rows[0])return res.status(400).json({error:'Assignee is not an inbox member'});assigneeName=rows[0].display_name;
+  }
+  let tagName:string|null=null;
+  if(input.tagId){
+    const g=(await pool.query('SELECT name FROM tags WHERE id=$1 AND inbox_id=$2',[input.tagId,inboxId])).rows[0];
+    if(!g)return res.status(400).json({error:'Unknown tag'});tagName=g.name;
+  }
+  let changed=0;
+  for(const t of threads){
+    if(input.status&&input.status!==t.status){
+      await pool.query('UPDATE threads SET status=$1,updated_at=now() WHERE id=$2',[input.status,t.id]);
+      await audit(req.actor.id,t.id,'thread.status',{from:t.status,to:input.status,bulk:true});changed++;
+    }
+    if(input.assigneeId!==undefined&&(input.assigneeId??null)!==t.assignee_id){
+      await pool.query('UPDATE threads SET assignee_id=$1,updated_at=now() WHERE id=$2',[input.assigneeId,t.id]);
+      await audit(req.actor.id,t.id,'thread.assigned',{to:assigneeName,bulk:true});
+      await notify(input.assigneeId,t.id,'assigned',req.actor.id,t.subject);changed++;
+    }
+    if(input.tagId){
+      const r=await pool.query('INSERT INTO thread_tags(thread_id,tag_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[t.id,input.tagId]);
+      if(r.rowCount){await audit(req.actor.id,t.id,'tag.added',{tag:tagName,bulk:true});changed++}
+    }
+    if(input.read===true)await pool.query('INSERT INTO thread_reads(user_id,thread_id,read_at) VALUES($1,$2,now()) ON CONFLICT(user_id,thread_id) DO UPDATE SET read_at=now()',[req.actor.id,t.id]);
+    if(input.read===false)await pool.query('DELETE FROM thread_reads WHERE user_id=$1 AND thread_id=$2',[req.actor.id,t.id]);
+  }
+  res.json({updated:threads.length,changed});
+}));
+
 app.post('/api/threads/:id/notes',wrap(async(req:any,res:any)=>{
   const {body}=z.object({body:z.string().trim().min(1).max(10000)}).parse(req.body);
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
