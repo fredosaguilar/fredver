@@ -1,0 +1,28 @@
+# Extension: on every change, check the scripts and build the Chrome Web Store zip. Download it from the
+# run's "Artifacts" section and upload it in the Chrome Web Store developer dashboard.
+name: Extension
+on:
+  push:
+    branches: [main]
+    paths: ['extension/**', 'store/build-store-zip.sh', '.github/workflows/extension.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: for f in extension/*.js; do node --check "$f"; done
+      - name: Build store zip
+        run: store/build-store-zip.sh
+      - name: Version
+        run: echo "VERSION=$(python3 -c "import json;print(json.load(open('extension/manifest.json'))['version'])")" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fredver-store-${{ env.VERSION }}
+          path: store/fredver-store.zip
