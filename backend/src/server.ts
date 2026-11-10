@@ -127,7 +127,7 @@ app.get('/api/threads',wrap(async(req:any,res:any)=>{
   const {rows}=await pool.query(`SELECT t.id,t.subject,t.status,t.assignee_id,t.from_name,t.from_email,t.snippet,t.last_message_at,t.message_count,t.updated_at,
       u.display_name AS assignee_name,u.email AS assignee_email,
       (SELECT count(*) FROM notes n WHERE n.thread_id=t.id)::int AS note_count,s.sent_at,s.sent_by,
-      t.awaiting_reply,t.last_client_message_at,i.sla_hours,
+      t.awaiting_reply,t.last_client_message_at,i.sla_hours,t.source_mailbox,
       (t.last_message_at > greatest(coalesce(r.read_at,'-infinity'::timestamptz),me.read_baseline)) AS unread,
       coalesce((SELECT json_agg(json_build_object('id',g.id,'name',g.name,'color',g.color) ORDER BY g.name) FROM thread_tags x JOIN tags g ON g.id=x.tag_id WHERE x.thread_id=t.id),'[]') AS tags,
       (SELECT du.display_name FROM drafts d JOIN users du ON du.id=d.updated_by WHERE d.thread_id=t.id) AS draft_by
@@ -157,7 +157,7 @@ async function viewers(threadId:string,actorId:string){
 app.get('/api/threads/:id',wrap(async(req:any,res:any)=>{
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   if(t.inbox_email.toLowerCase()!==sharedMailbox())return res.status(409).json({error:'Inbox is not connected to Gmail'});
-  const full=await gmail('threads/'+encodeURIComponent(t.gmail_thread_id)+'?format=full');
+  const full=await gmail('threads/'+encodeURIComponent(t.gmail_thread_id)+'?format=full',{as:t.source_mailbox||undefined});
   const messages=(full.messages||[]).map((m:any)=>({id:m.id,from:header(m,'From'),to:header(m,'To'),cc:header(m,'Cc'),replyTo:header(m,'Reply-To'),rfcId:header(m,'Message-ID'),date:m.internalDate?new Date(Number(m.internalDate)).toISOString():header(m,'Date'),
     subject:header(m,'Subject'),snippet:m.snippet||'',...(({attachments,...p})=>({...p,attachments:attachments.map(({attachmentId,...a})=>a)}))(messageParts(m.payload))}));
   // attachments keep their partId (stable), which the download endpoint uses.
@@ -182,10 +182,11 @@ app.get('/api/threads/:id',wrap(async(req:any,res:any)=>{
 async function loadAttachment(req:any){
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return null;
   if(!/^[\w-]{1,64}$/.test(req.params.messageId)||!/^[\d.]{1,32}$/.test(req.params.partId))return null;
-  const m=await gmail('messages/'+encodeURIComponent(req.params.messageId)+'?format=full');
+  const as=t.source_mailbox||undefined;
+  const m=await gmail('messages/'+encodeURIComponent(req.params.messageId)+'?format=full',{as});
   if(m.threadId!==t.gmail_thread_id)return null;
   const a=messageParts(m.payload).attachments.find(x=>x.partId===req.params.partId);if(!a)return null;
-  const r=await gmail(`messages/${encodeURIComponent(m.id)}/attachments/${encodeURIComponent(a.attachmentId)}`);
+  const r=await gmail(`messages/${encodeURIComponent(m.id)}/attachments/${encodeURIComponent(a.attachmentId)}`,{as});
   return {...a,mimeType:/^[\w.+-]+\/[\w.+-]+$/.test(a.mimeType)?a.mimeType:'application/octet-stream',data:Buffer.from(r.data,'base64url')};
 }
 app.get('/api/threads/:id/attachments/:messageId/:partId',wrap(async(req:any,res:any)=>{
@@ -277,7 +278,13 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   const mailbox=sharedMailbox();
   if(t.inbox_email.toLowerCase()!==mailbox)return res.status(409).json({error:'Inbox is not connected to Gmail'});
-  const full=await gmail('threads/'+encodeURIComponent(t.gmail_thread_id)+'?format=full');
+  // Conversations added from an employee's own mailbox ("linked") are read from that mailbox. Only that
+  // employee may reply from their own address (the reply then stays in their Gmail thread); everyone else
+  // replies from the shared address, and the client's answer moves the conversation into the shared mailbox.
+  const src:string|null=t.source_mailbox;
+  if(src&&input.from==='me'&&req.actor.email.toLowerCase()!==src.toLowerCase())
+    return res.status(400).json({error:`This conversation is in ${src}'s mailbox. Reply from the shared address instead.`});
+  const full=await gmail('threads/'+encodeURIComponent(t.gmail_thread_id)+'?format=full',{as:src||undefined});
   const msgs=full.messages||[];if(!msgs.length)return res.status(400).json({error:'Conversation has no messages'});
   const target=[...msgs].reverse().find((m:any)=>!isInternal(parseAddress(header(m,'From')).email))||msgs.at(-1);
   const subj0=header(msgs[0],'Subject')||'';
@@ -301,19 +308,19 @@ app.post('/api/threads/:id/send',wrap(async(req:any,res:any)=>{
   if(fwd&&input.includeAttachments&&parts.attachments.length){
     if(parts.attachments.reduce((n,a)=>n+a.size,0)>20*1024*1024)return res.status(413).json({error:'Attachments are too large to forward (over 20 MB).'});
     attachments=await Promise.all(parts.attachments.map(async a=>{
-      const r=await gmail(`messages/${encodeURIComponent(target.id)}/attachments/${encodeURIComponent(a.attachmentId)}`);
+      const r=await gmail(`messages/${encodeURIComponent(target.id)}/attachments/${encodeURIComponent(a.attachmentId)}`,{as:src||undefined});
       return {filename:a.filename,mimeType:a.mimeType,data:Buffer.from(r.data,'base64url')};
     }));
   }
   const me=input.from==='me';
   const bcc=[...input.bcc];
-  if(me&&![...input.to,...input.cc,...bcc].includes(mailbox))bcc.push(mailbox);
+  if(me&&!src&&![...input.to,...input.cc,...bcc].includes(mailbox))bcc.push(mailbox);
   const msgId=header(target,'Message-ID');
   const rfcId=newMessageId((process.env.ALLOWED_DOMAIN||'mail.local'));
   const raw=buildMime({from:me?fromHeader(req.actor.display_name,req.actor.email):fromHeader(t.inbox_name,mailbox),
     to:input.to,cc:input.cc,bcc,subject,messageId:rfcId,
     inReplyTo:msgId||undefined,references:[header(target,'References'),msgId].filter(Boolean).join(' ')||undefined,text,html,attachments:[...attachments,...uploads]});
-  const sent=await send(raw,me?{as:req.actor.email}:{threadId:t.gmail_thread_id});
+  const sent=await send(raw,src?(me?{as:req.actor.email,threadId:t.gmail_thread_id}:{}):(me?{as:req.actor.email}:{threadId:t.gmail_thread_id}));
   await audit(req.actor.id,t.id,fwd?'forward.sent':'reply.sent',{messageId:sent.id,rfcMessageId:rfcId,from:me?req.actor.email:mailbox,mode:input.mode,to:input.to,cc:input.cc});
   await pool.query(`UPDATE threads SET status=COALESCE($1,status),updated_at=now(),last_message_at=now(),awaiting_reply=false,gmail_history_id=NULL WHERE id=$2`,[input.status??null,t.id]);
   await pool.query('DELETE FROM drafts WHERE thread_id=$1',[t.id]);

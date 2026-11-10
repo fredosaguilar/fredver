@@ -326,6 +326,7 @@ select.plain:hover{background:#0000000a}
 .review{width:auto;border-radius:18px;padding:6px 10px;font-size:13px}
 .saved{font-size:12px;color:var(--mut);align-self:center}
 .draftbar{display:flex;align-items:center;gap:12px;justify-content:space-between;background:#e8f0fe;color:#174ea6;border-radius:8px;padding:8px 12px;margin:16px 0 0 48px;font-size:13px;font-weight:500}
+.linkbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:#f1f3f4;color:#3c4043;border-radius:8px;padding:8px 12px;margin:0 0 8px;font-size:13px}
 .slaline{font-size:12px;font-weight:600;border-radius:6px;padding:6px 8px;margin-top:8px}.slaline.over{background:#fce8e6;color:#c5221f}.slaline.soon{background:#fef0e0;color:#b06000}
 .tagrow{display:grid;grid-template-columns:88px 1fr;align-items:start;margin-top:10px;font-size:13px}.tagrow .k{color:var(--mut);padding-top:4px}
 .tagbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -428,6 +429,7 @@ function renderList(){
       h('div',{class:'meta'},
         due?h('span',{class:'sla '+due.cls,title:due.title},due.label):null,
         t.draft_by?h('span',{class:'chip none',title:'Draft reply saved by '+t.draft_by},'✎ Draft · '+t.draft_by):null,
+        t.source_mailbox?h('span',{class:'chip none',title:'Added from '+t.source_mailbox+'’s mailbox'},'📥 via '+((S.members.find(m=>m.email.toLowerCase()===t.source_mailbox.toLowerCase())||{}).display_name||t.source_mailbox.split('@')[0])):null,
         S.view==='sent'&&t.sent_by?h('span',{class:'chip',title:'Last sent by '+t.sent_by+' · '+full(t.sent_at)},'↗ Sent by '+t.sent_by):null,
         t.note_count?h('span',{class:'chip none',title:'Internal notes'},'📝 '+t.note_count):null,
         h('span',{class:'pill '+t.status},STATUS[t.status]),
@@ -529,6 +531,13 @@ function renderConversation(){
   const t=d.thread,mailbox=t.inbox_email.toLowerCase();
   const th=h('div',{class:'thread'});
   th.append(h('h1',{},t.subject));
+  if(t.source_mailbox){
+    const owner=S.members.find(m=>m.email.toLowerCase()===t.source_mailbox.toLowerCase());
+    const mine=t.source_mailbox.toLowerCase()===S.me?.email?.toLowerCase();
+    th.append(h('div',{class:'linkbar'},`📥 Added from ${mine?'your':(owner?.display_name||t.source_mailbox)+'’s'} mailbox. Replies from ${t.inbox_email} move it into the shared inbox once the client answers.`,
+      (mine||S.me?.role==='admin')?h('button',{class:'link',onclick:async()=>{if(!confirm('Remove this conversation from the shared inbox? Notes and history in Fredver are deleted; the email stays in the mailbox.'))return;
+        try{const id=S.threadId;leaveThread();await api('/api/threads/'+id+'/share','DELETE');shareCache.clear();loadCounts();renderNav();renderMain();loadThreads()}catch(e){alert(e.message)}}},'Remove from shared inbox'):null));
+  }
   th.append(h('div',{id:'banner'}));
   d.messages.forEach((m,i)=>{
     const last=i===d.messages.length-1,open=last||S.expanded.has(m.id);
@@ -558,8 +567,12 @@ const addrOf=v=>{const m=(v||'').match(/<([^>]+)>/);return (m?m[1]:v||'').trim()
 const listAddrs=v=>(v||'').split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(addrOf).filter(Boolean);
 const internal=e=>e.endsWith('@'+CONFIG_DOMAIN);
 const CONFIG_DOMAIN='columbiabasininsurance.com';
-const fromOptions=()=>[['shared',`${S.inbox?.name||'Shared inbox'} <${S.inbox?.email||''}>`],['me',`${S.me?.display_name||'Me'} <${S.me?.email||S.email}> (my address)`]];
-const fromHint=f=>f==='me'?`Sent from your own mailbox. A hidden copy goes to ${S.inbox?.email} so the team sees it in this conversation.`
+const linkedSrc=()=>S.threadId&&S.detail?.thread?.source_mailbox?.toLowerCase()||'';
+// For a conversation added from someone's own mailbox, only that person can reply from their address.
+const fromOptions=()=>[['shared',`${S.inbox?.name||'Shared inbox'} <${S.inbox?.email||''}>`],['me',`${S.me?.display_name||'Me'} <${S.me?.email||S.email}> (my address)`]]
+  .filter(([v])=>v!=='me'||!linkedSrc()||linkedSrc()===S.me?.email?.toLowerCase()||S.compose);
+const fromHint=f=>linkedSrc()&&!S.compose?(f==='me'?'Sent from your own mailbox and kept in this conversation.':`Sent from ${S.inbox?.email}. When the client answers, this conversation moves into the shared inbox.`)
+  :f==='me'?`Sent from your own mailbox. A hidden copy goes to ${S.inbox?.email} so the team sees it in this conversation.`
   :`Sent from ${S.inbox?.email}. Visible to everyone in ${S.inbox?.name||'the shared inbox'}.`;
 
 let sigOn=store.get('sig')!=='0';
@@ -659,7 +672,7 @@ function replyDefaults(mode){
 }
 function startReply(mode){
   const keep=S.reply;
-  S.reply={mode,from:keep?.from||'shared',html:keep?.html||'',showCc:false,attach:true,error:'',sending:false,...replyDefaults(mode)};
+  S.reply={mode,from:keep?.from||(linkedSrc()&&linkedSrc()===S.me?.email?.toLowerCase()?'me':'shared'),html:keep?.html||'',showCc:false,attach:true,error:'',sending:false,...replyDefaults(mode)};
   if(S.reply.cc)S.reply.showCc=true;
   renderMain();
   setTimeout(()=>main.querySelector(mode==='forward'?'.rto input':'.reply .ed')?.focus(),0);
@@ -775,6 +788,8 @@ function describe(a){
   if(a.action==='forward.sent')return `${who} forwarded to ${(m.to||[]).join(', ')}`;
   if(a.action==='compose.sent')return `${who} started this conversation`;
   if(a.action==='thread.reopened')return 'Reopened by a new client message';
+  if(a.action==='thread.shared')return `${who} added this from their mailbox`;
+  if(a.action==='thread.moved')return 'Moved into the shared inbox (the client replied to it)';
   if(a.action==='tag.added')return `${who} added tag “${m.tag}”`;
   if(a.action==='tag.removed')return `${who} removed tag “${m.tag||''}”`;
   if(a.action==='draft.started')return `${who} started a draft reply`;
@@ -869,6 +884,50 @@ function renderBanner(viewers){
   const b=main.getElementById('banner');if(!b)return;
   b.replaceChildren(...(viewers||[]).map(v=>h('div',{class:'banner'},v.activity==='replying'?`⚠ ${v.display_name} is writing a reply to this conversation`:`👁 ${v.display_name} is viewing this conversation`)));
 }
+
+// ---------- "Add to shared inbox" card on emails in your own mailbox ----------
+const shareHost=h('div',{id:'fredvir-share'});shareHost.style.cssText='position:fixed;right:72px;bottom:20px;z-index:2147481000;display:none';
+const share=shareHost.attachShadow({mode:'open'});document.documentElement.append(shareHost);
+const SHARECSS=BASE+`
+.card{background:#fff;border-radius:16px;box-shadow:0 2px 12px #0003;padding:10px 12px;display:flex;align-items:center;gap:10px;max-width:440px;font-size:13px}
+.card .ic{width:28px;height:28px;border-radius:8px;background:var(--gl);color:var(--g);display:grid;place-items:center;flex:none}
+.card .ic svg{width:18px;height:18px}
+.card{width:420px}.card .txt{flex:1;min-width:0}.card .txt b{display:block;font-size:13px}.card .txt span{color:var(--mut);font-size:12px}
+.card .btn{white-space:nowrap;padding:7px 14px}
+.card .x{color:var(--mut);padding:2px 4px;font-size:16px}`;
+const shareCache=new Map();let shareKey='',shareBusy=false,shareHidden=new Set();
+const gmailAccount=()=>{const m=document.title.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);return m?m[0].toLowerCase():''};
+function openGmailThreadId(){
+  const el=[...document.querySelectorAll('h2[data-legacy-thread-id]')].find(e=>e.offsetParent!==null);
+  return el?.getAttribute('data-legacy-thread-id')||'';
+}
+function renderShare(){
+  const gid=openGmailThreadId(),acct=gmailAccount();
+  const show=S.signedIn&&!S.authError&&!S.open&&gid&&acct&&(acct===S.me?.email?.toLowerCase()||acct===S.inbox?.email?.toLowerCase())&&!shareHidden.has(gid);
+  if(!show){shareHost.style.display='none';return}
+  const key=acct+'|'+gid;
+  const st=shareCache.get(key);
+  if(st===undefined&&!shareBusy){shareBusy=true;
+    api('/api/share/status?'+new URLSearchParams({account:acct,gid})).then(r=>shareCache.set(key,r)).catch(e=>shareCache.set(key,{error:e.message})).finally(()=>{shareBusy=false;renderShare()})}
+  if(key===shareKey&&shareHost.style.display==='block'&&st===shareHost._st)return;
+  shareKey=key;shareHost._st=st;
+  const inbox=S.inbox?.name||'the shared inbox';
+  const card=h('div',{class:'card',role:'region','aria-label':'Fredver'},h('span',{class:'ic'},svg(ICON.inbox)));
+  if(!st)card.append(h('div',{class:'txt'},h('span',{},'Checking Fredver…')));
+  else if(st.error)card.append(h('div',{class:'txt'},h('b',{},'Fredver'),h('span',{},st.error)));
+  else if(st.thread?.id){
+    card.append(h('div',{class:'txt'},h('b',{},'✓ In '+inbox),h('span',{},`${STATUS[st.thread.status]||st.thread.status} · ${st.thread.assignee_name||'Unassigned'}`)),
+      h('button',{class:'btn ghost',onclick:()=>{S.open=true;placeMain();openThread(st.thread.id);renderShare()}},'Open in Fredver'));
+  }else if(st.canShare||st.thread){
+    card.append(h('div',{class:'txt'},h('b',{},'Share with your team?'),h('span',{},`Teammates can see, assign and reply in ${inbox}.`)),
+      h('button',{class:'btn',onclick:async e=>{e.target.disabled=true;e.target.textContent='Adding…';
+        try{const r=await api('/api/share','POST',{gid});shareCache.delete(key);loadCounts();S.open=true;placeMain();openThread(r.id)}
+        catch(err){alert(err.message);e.target.disabled=false;e.target.textContent='＋ Add to Shared Inbox'}}},'＋ Add to Shared Inbox'));
+  }else return void(shareHost.style.display='none');
+  card.append(h('button',{class:'x',title:'Hide for this email','aria-label':'Hide',onclick:()=>{shareHidden.add(gid);renderShare()}},'×'));
+  share.replaceChildren(h('style',{},SHARECSS),card);shareHost.style.display='block';
+}
+setInterval(renderShare,800);
 
 // ---------- data ----------
 async function switchAccount(){await call('signout').catch(()=>{});Object.assign(S,{signedIn:false,email:'',me:null,inboxes:[],inbox:null,counts:{},members:[],authError:''});closePane();await doSignIn()}

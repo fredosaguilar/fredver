@@ -5,6 +5,7 @@ import sanitizeHtml from 'sanitize-html';
 import {z} from 'zod';
 import {pool} from './db.js';
 import {gmail,header,isInternal,parseAddress,sharedMailbox} from './gmail.js';
+import {applyThread,sharedInboxId} from './sync.js';
 
 type Actor={id:string;email:string;role:string;display_name:string};
 const wrap=(fn:any)=>(req:any,res:any,next:any)=>Promise.resolve(fn(req,res,next)).catch(next);
@@ -168,6 +169,65 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     }
     // The list endpoint (view=search&ids=…) returns these as normal conversation rows.
     res.json({ids});
+  }));
+
+  // ---------- add a conversation from your own mailbox ("Add to shared inbox") ----------
+  // Only ever the signed-in employee's own mailbox. If the email also reached the shared mailbox, the existing
+  // shared conversation is used instead of creating a second copy.
+  const gidOk=(g:string)=>/^[0-9a-f]{8,24}$/i.test(g);
+  async function findInShared(gid:string,owner:string){
+    const mt=await gmail(`threads/${encodeURIComponent(gid)}?format=metadata&metadataHeaders=Message-ID`,{as:owner});
+    for(const id of (mt.messages||[]).map((m:any)=>header(m,'Message-ID')).filter(Boolean).slice(0,5)){
+      const f=await gmail('messages?maxResults=1&q='+encodeURIComponent('rfc822msgid:'+id.replace(/^<|>$/g,'')));
+      if(f.messages?.[0])return f.messages[0].threadId as string;
+    }
+    return null;
+  }
+  async function rowSummary(where:string,args:any[]){
+    return (await pool.query(`SELECT t.id,t.status,t.source_mailbox,u.display_name AS assignee_name FROM threads t LEFT JOIN users u ON u.id=t.assignee_id WHERE ${where} LIMIT 1`,args)).rows[0]||null;
+  }
+  app.get('/api/share/status',wrap(async(req:any,res:any)=>{
+    const {account,gid}=z.object({account:z.string().trim().toLowerCase(),gid:z.string()}).parse(req.query);
+    if(!gidOk(gid))return res.status(400).json({error:'Bad thread id'});
+    const inboxId=await sharedInboxId();
+    if(!await memberOf(inboxId,req.actor.id))return res.sendStatus(404);
+    if(account===sharedMailbox())return res.json({canShare:false,thread:await rowSummary('t.inbox_id=$1 AND t.gmail_thread_id=$2 AND t.source_mailbox IS NULL',[inboxId,gid])});
+    if(account!==req.actor.email.toLowerCase())return res.json({canShare:false,thread:null});
+    let row=await rowSummary('t.inbox_id=$1 AND t.gmail_thread_id=$2 AND lower(t.source_mailbox)=$3',[inboxId,gid,account]);
+    if(!row){const sg=await findInShared(gid,account);if(sg)row=await rowSummary('t.inbox_id=$1 AND t.gmail_thread_id=$2 AND t.source_mailbox IS NULL',[inboxId,sg])||{inSharedMailbox:true}}
+    res.json({canShare:!row,thread:row});
+  }));
+  app.post('/api/share',wrap(async(req:any,res:any)=>{
+    const {gid}=z.object({gid:z.string()}).parse(req.body);
+    if(!gidOk(gid))return res.status(400).json({error:'Bad thread id'});
+    const owner=req.actor.email.toLowerCase();
+    const inboxId=await sharedInboxId();
+    if(!await memberOf(inboxId,req.actor.id))return res.sendStatus(404);
+    const existing=await rowSummary('t.inbox_id=$1 AND t.gmail_thread_id=$2 AND lower(t.source_mailbox)=$3',[inboxId,gid,owner]);
+    if(existing)return res.json({id:existing.id,already:true});
+    const sg=await findInShared(gid,owner);
+    if(sg){
+      const prev=(await pool.query('SELECT id,status,message_count,gmail_history_id,assignee_id,source_mailbox FROM threads WHERE inbox_id=$1 AND gmail_thread_id=$2',[inboxId,sg])).rows[0];
+      const r=await applyThread(inboxId,sg,null,null,prev);
+      if(r&&!prev)await pool.query(`UPDATE threads SET status='open' WHERE id=$1`,[r.id]);
+      return res.json({id:r?.id,inSharedMailbox:true});
+    }
+    const r=await applyThread(inboxId,gid,null,owner,undefined);
+    if(!r)return res.status(404).json({error:'Conversation not found in your mailbox'});
+    await pool.query(`UPDATE threads SET status='open',updated_at=now() WHERE id=$1`,[r.id]);
+    await h.audit(req.actor.id,r.id,'thread.shared',{from:owner});
+    console.log(JSON.stringify({event:'thread.shared',by:owner,thread:r.id}));
+    res.status(201).json({id:r.id});
+  }));
+  app.delete('/api/threads/:id/share',wrap(async(req:any,res:any)=>{
+    const t=await h.authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
+    if(!t.source_mailbox)return res.status(400).json({error:'This conversation is in the shared mailbox; close it instead'});
+    if(t.source_mailbox.toLowerCase()!==req.actor.email.toLowerCase()&&req.actor.role!=='admin')return res.status(403).json({error:'Only the person who added it, or an admin, can remove it'});
+    const c=await pool.connect();
+    try{await c.query('BEGIN');for(const q of ['DELETE FROM notes WHERE thread_id=$1','DELETE FROM audit_events WHERE thread_id=$1','DELETE FROM threads WHERE id=$1'])await c.query(q,[t.id]);await c.query('COMMIT')}
+    catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
+    console.log(JSON.stringify({event:'thread.unshared',by:req.actor.email,thread:t.id}));
+    res.json({ok:true});
   }));
 
   // ---------- team management (admins) ----------
