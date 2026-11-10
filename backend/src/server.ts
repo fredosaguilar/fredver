@@ -13,7 +13,7 @@ import {OAuth2Client} from 'google-auth-library';
 import {z} from 'zod';
 import {pool} from './db.js';
 import {syncInbox} from './sync.js';
-import {gmail,GmailError,header,isInternal,messageParts,parseAddress,sharedMailbox,signatureFor,sendRaw} from './gmail.js';
+import {embedInline,gmail,GmailError,header,isInternal,messageParts,parseAddress,sharedMailbox,signatureFor,sendRaw} from './gmail.js';
 import {buildMime,clean,encodeHeader,escapeHtml,htmlToText,newMessageId,textToHtml} from './mime.js';
 
 const app=express();
@@ -158,8 +158,13 @@ app.get('/api/threads/:id',wrap(async(req:any,res:any)=>{
   const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
   if(t.inbox_email.toLowerCase()!==sharedMailbox())return res.status(409).json({error:'Inbox is not connected to Gmail'});
   const full=await gmail('threads/'+encodeURIComponent(t.gmail_thread_id)+'?format=full',{as:t.source_mailbox||undefined});
-  const messages=(full.messages||[]).map((m:any)=>({id:m.id,from:header(m,'From'),to:header(m,'To'),cc:header(m,'Cc'),replyTo:header(m,'Reply-To'),rfcId:header(m,'Message-ID'),date:m.internalDate?new Date(Number(m.internalDate)).toISOString():header(m,'Date'),
-    subject:header(m,'Subject'),snippet:m.snippet||'',...(({attachments,...p})=>({...p,attachments:attachments.map(({attachmentId,...a})=>a)}))(messageParts(m.payload))}));
+  const messages=await Promise.all((full.messages||[]).map(async(m:any)=>{
+    const {attachments,inline,html,...p}=messageParts(m.payload);
+    return {id:m.id,from:header(m,'From'),to:header(m,'To'),cc:header(m,'Cc'),replyTo:header(m,'Reply-To'),rfcId:header(m,'Message-ID'),
+      date:m.internalDate?new Date(Number(m.internalDate)).toISOString():header(m,'Date'),subject:header(m,'Subject'),snippet:m.snippet||'',...p,
+      html:await embedInline(html,inline,m.id,t.source_mailbox||undefined),
+      attachments:attachments.map(({attachmentId,data,contentId,...a})=>a)};
+  }));
   // attachments keep their partId (stable), which the download endpoint uses.
   const [notes,activity,members,senders]=await Promise.all([
     pool.query('SELECT n.id,n.body,n.created_at,u.display_name,u.email FROM notes n JOIN users u ON u.id=n.author_id WHERE n.thread_id=$1 ORDER BY n.created_at',[t.id]),

@@ -55,16 +55,45 @@ function guessType(name:string,type:string){
   return EXT[(name.split('.').pop()||'').toLowerCase()]||type||'application/octet-stream';
 }
 
+type Part={filename:string;size:number;mimeType:string;attachmentId:string;partId:string;contentId:string;data?:string};
+// Split a message into text, HTML, real attachments and inline images. Images the HTML displays through
+// "cid:" references (signature photos, logos) are inline, not attachments: they are shown inside the message.
 export function messageParts(payload:any){
-  let text='',html='';const attachments:{filename:string;size:number;mimeType:string;attachmentId:string;partId:string}[]=[];
+  let text='',html='';const files:Part[]=[];
   (function walk(p:any){
     if(!p)return;
-    if(p.filename&&p.body?.attachmentId){attachments.push({filename:p.filename,size:p.body.size||0,mimeType:guessType(p.filename,p.mimeType),attachmentId:p.body.attachmentId,partId:p.partId});return}
+    const hdr=(n:string)=>(p.headers||[]).find((x:any)=>x.name.toLowerCase()===n)?.value||'';
+    const cid=hdr('content-id').trim().replace(/^<|>$/g,'');
+    if(p.body?.attachmentId||(cid&&p.body?.data&&/^image\//i.test(p.mimeType))){
+      files.push({filename:p.filename||'',size:p.body.size||0,mimeType:guessType(p.filename||'',p.mimeType),attachmentId:p.body.attachmentId||'',partId:p.partId,contentId:cid,data:p.body.data});
+      return;
+    }
     if(p.mimeType==='text/plain'&&p.body?.data&&!text)text=b64(p.body.data);
     else if(p.mimeType==='text/html'&&p.body?.data&&!html)html=b64(p.body.data);
     (p.parts||[]).forEach(walk);
   })(payload);
-  return {text,html,attachments};
+  const lower=html.toLowerCase();
+  const isInline=(f:Part)=>!!f.contentId&&(lower.includes('cid:'+f.contentId.toLowerCase())||!f.filename);
+  const attachments=files.filter(f=>!isInline(f)&&f.filename&&f.attachmentId);
+  const inline=files.filter(isInline);
+  return {text,html,attachments,inline};
+}
+
+// Replace "cid:" image references with data: URLs so inline images (signatures, logos) display in place.
+// Small images only (each up to 1 MB, 4 MB per message); larger ones are left as they are.
+export async function embedInline(html:string,inline:Part[],messageId:string,as?:string){
+  if(!html||!inline.length)return html;
+  let budget=4*1024*1024;
+  for(const f of inline){
+    if(f.size>1024*1024||f.size>budget)continue;
+    let data=f.data;
+    if(!data&&f.attachmentId){try{data=(await gmail(`messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(f.attachmentId)}`,{as})).data}catch{continue}}
+    if(!data)continue;
+    budget-=f.size;
+    const url=`data:${/^image\/[\w.+-]+$/i.test(f.mimeType)?f.mimeType:'image/png'};base64,${Buffer.from(data,'base64url').toString('base64')}`;
+    html=html.replace(new RegExp('cid:'+f.contentId.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),url);
+  }
+  return html;
 }
 
 // Ask Gmail to publish a Pub/Sub message whenever the shared mailbox's INBOX changes.
