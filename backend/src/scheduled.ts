@@ -4,6 +4,7 @@ import type {Express} from 'express';
 import {z} from 'zod';
 import {pool} from './db.js';
 import {GmailError} from './gmail.js';
+import {notifyDue} from './features.js';
 import {type Actor,audit,authorizedThread,composeSchema,doCompose,doSend,isMember,sendSchema} from './sending.js';
 
 const MAX_SCHEDULED_BYTES=15*1024*1024;
@@ -62,7 +63,7 @@ let lastRun=0;
 // Called from frequent API requests (counts are fetched every 15 s by every open Fredver tab).
 export async function maybeProcessScheduled(){
   if(Date.now()-lastRun<20_000)return;lastRun=Date.now();
-  try{await processScheduled()}catch(e){console.error('scheduled processing failed',e)}
+  try{await processScheduled();await notifyDue()}catch(e){console.error('scheduled processing failed',e)}
 }
 
 export function registerScheduled(app:Express){

@@ -66,12 +66,23 @@ export async function applyThread(inboxId:string,gid:string,historyId:string|nul
       await client.query(`INSERT INTO audit_events(thread_id,action,metadata) VALUES($1,'thread.reopened','{"reason":"new client message"}')`,[id]);
       reopened=true;
     }
+    // Auto-assign rules run once, on conversations Fredver sees for the first time that are still open.
     const applied=await client.query('SELECT 1 FROM rule_applied WHERE thread_id=$1 LIMIT 1',[id]);
-    if(!prev&&!applied.rowCount){
-      const rules=await client.query('SELECT * FROM automation_rules WHERE inbox_id=$1 AND enabled=true ORDER BY name',[inboxId]);
-      for(const rule of rules.rows)if(subject.toLowerCase().includes(rule.match_subject.toLowerCase())){
+    const st=(await client.query('SELECT status,assignee_id FROM threads WHERE id=$1',[id])).rows[0];
+    if(!prev&&!applied.rowCount&&st.status!=='closed'){
+      const rules=await client.query('SELECT * FROM automation_rules WHERE inbox_id=$1 AND enabled=true ORDER BY created_at,name',[inboxId]);
+      const subj=subject.toLowerCase(),sender=`${from.name} ${from.email}`.toLowerCase();
+      for(const rule of rules.rows){
+        const ms=(rule.match_subject||'').trim().toLowerCase(),mf=(rule.match_from||'').trim().toLowerCase();
+        if(!ms&&!mf)continue;
+        // Matches when the subject contains the phrase OR the sender (name/address) contains the text.
+        if(!((ms&&subj.includes(ms))||(mf&&sender.includes(mf))))continue;
         await client.query('UPDATE threads SET status=COALESCE($1,status),assignee_id=COALESCE($2,assignee_id) WHERE id=$3',[rule.action_status,rule.assignee_id,id]);
+        if(rule.tag_id)await client.query('INSERT INTO thread_tags(thread_id,tag_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,rule.tag_id]);
         await client.query('INSERT INTO rule_applied(thread_id,rule_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[id,rule.id]);
+        await client.query(`INSERT INTO audit_events(thread_id,action,metadata) VALUES($1,'rule.applied',$2)`,[id,JSON.stringify({rule:rule.name})]);
+        if(rule.assignee_id&&!st.assignee_id)await client.query(`INSERT INTO notifications(user_id,thread_id,kind,detail) VALUES($1,$2,'assigned',$3)`,[rule.assignee_id,id,('Rule: '+rule.name).slice(0,200)]);
+        break; // first matching rule wins
       }
     }
     await client.query('COMMIT');

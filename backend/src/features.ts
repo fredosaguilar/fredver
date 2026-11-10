@@ -44,6 +44,14 @@ export async function notifyMentions(body:string,threadId:string,inboxId:string,
   for(const id of hit)await notify(id,threadId,'mention',actor.id,body.slice(0,160));
 }
 
+// Tell the assignee when a conversation's manual due date arrives (once per due date).
+export async function notifyDue(){
+  const {rows}=await pool.query(`UPDATE threads SET due_notified_at=now() WHERE due_at IS NOT NULL AND due_at<=now() AND due_notified_at IS NULL
+    AND status<>'closed' RETURNING id,assignee_id,subject`);
+  for(const r of rows)if(r.assignee_id)await pool.query(`INSERT INTO notifications(user_id,thread_id,kind,detail) VALUES($1,$2,'due',$3)`,[r.assignee_id,r.id,(r.subject||'').slice(0,200)]);
+  return rows.length;
+}
+
 export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Actor)=>Promise<any>;audit:(a:string|null,t:string,action:string,m?:any)=>Promise<any>}){
   // ---------- notifications ----------
   app.get('/api/notifications',wrap(async(req:any,res:any)=>{
@@ -78,6 +86,15 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     const {rows}=await pool.query('INSERT INTO templates(inbox_id,name,body_html,created_by) VALUES($1,$2,$3,$4) RETURNING id',[req.params.id,name,cleanHtml(bodyHtml),req.actor.id]);
     res.status(201).json(rows[0]);
   }));
+  app.patch('/api/templates/:tid',wrap(async(req:any,res:any)=>{
+    if(!uuid.safeParse(req.params.tid).success)return res.sendStatus(404);
+    const i=z.object({name:z.string().trim().min(1).max(100).optional(),bodyHtml:z.string().min(1).max(50000).optional()}).parse(req.body);
+    const t=(await pool.query('SELECT inbox_id,created_by FROM templates WHERE id=$1',[req.params.tid])).rows[0];
+    if(!t||!await memberOf(t.inbox_id,req.actor.id))return res.sendStatus(404);
+    if(t.created_by!==req.actor.id&&req.actor.role!=='admin')return res.status(403).json({error:'Only the author or an admin can edit this template'});
+    await pool.query('UPDATE templates SET name=COALESCE($1,name),body_html=COALESCE($2,body_html),updated_at=now() WHERE id=$3',[i.name??null,i.bodyHtml?cleanHtml(i.bodyHtml):null,req.params.tid]);
+    res.json({ok:true});
+  }));
   app.delete('/api/templates/:tid',wrap(async(req:any,res:any)=>{
     if(!uuid.safeParse(req.params.tid).success)return res.sendStatus(404);
     const t=(await pool.query('SELECT inbox_id,created_by FROM templates WHERE id=$1',[req.params.tid])).rows[0];
@@ -98,6 +115,15 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     const {name,color}=z.object({name:z.string().trim().min(1).max(40),color:z.string().regex(/^#[0-9a-f]{6}$/i).default('#5f6368')}).parse(req.body);
     const {rows}=await pool.query('INSERT INTO tags(inbox_id,name,color) VALUES($1,$2,$3) ON CONFLICT(inbox_id,name) DO UPDATE SET color=EXCLUDED.color RETURNING id,name,color',[req.params.id,name,color]);
     res.status(201).json(rows[0]);
+  }));
+  app.patch('/api/tags/:tag',wrap(async(req:any,res:any)=>{
+    if(!uuid.safeParse(req.params.tag).success)return res.sendStatus(404);
+    const i=z.object({name:z.string().trim().min(1).max(40).optional(),color:z.string().regex(/^#[0-9a-f]{6}$/i).optional()}).parse(req.body);
+    const g=(await pool.query('SELECT inbox_id FROM tags WHERE id=$1',[req.params.tag])).rows[0];
+    if(!g||!await memberOf(g.inbox_id,req.actor.id))return res.sendStatus(404);
+    try{await pool.query('UPDATE tags SET name=COALESCE($1,name),color=COALESCE($2,color) WHERE id=$3',[i.name??null,i.color??null,req.params.tag])}
+    catch(e:any){if(e.code==='23505')return res.status(409).json({error:'A tag with that name already exists'});throw e}
+    res.json({ok:true});
   }));
   app.delete('/api/tags/:tag',wrap(async(req:any,res:any)=>{
     if(req.actor.role!=='admin')return res.status(403).json({error:'Admins only'});
@@ -259,6 +285,47 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     if(i.active===false)await pool.query(`UPDATE threads SET assignee_id=NULL WHERE assignee_id=$1 AND status<>'closed'`,[req.params.uid]);
     console.log(JSON.stringify({event:'team.updated',by:req.actor.email,user:req.params.uid,...i}));
     res.json({ok:true});
+  }));
+
+  // ---------- auto-assign rules (admins) ----------
+  const ruleBody=z.object({name:z.string().trim().min(1).max(80),matchSubject:z.string().trim().max(200).default(''),matchFrom:z.string().trim().max(200).default(''),
+    assigneeId:uuid.nullable().default(null),status:z.enum(['open','pending']).nullable().default(null),tagId:uuid.nullable().default(null),enabled:z.boolean().default(true)})
+    .refine(r=>r.matchSubject||r.matchFrom,'Add a subject phrase or a sender to match').refine(r=>r.assigneeId||r.status||r.tagId,'Choose at least one action');
+  async function checkRefs(inboxId:string,r:any){
+    if(r.assigneeId&&!await memberOf(inboxId,r.assigneeId))throw Object.assign(Error('Assignee is not on this inbox'),{status:400});
+    if(r.tagId&&!(await pool.query('SELECT 1 FROM tags WHERE id=$1 AND inbox_id=$2',[r.tagId,inboxId])).rowCount)throw Object.assign(Error('Unknown tag'),{status:400});
+  }
+  app.get('/api/inboxes/:id/rules',wrap(async(req:any,res:any)=>{
+    if(!await memberOf(req.params.id,req.actor.id))return res.sendStatus(404);
+    const {rows}=await pool.query(`SELECT r.id,r.name,r.match_subject,r.match_from,r.assignee_id,r.action_status,r.tag_id,r.enabled,u.display_name AS assignee_name,g.name AS tag_name,
+      (SELECT count(*) FROM rule_applied a WHERE a.rule_id=r.id)::int AS times_used
+      FROM automation_rules r LEFT JOIN users u ON u.id=r.assignee_id LEFT JOIN tags g ON g.id=r.tag_id WHERE r.inbox_id=$1 ORDER BY r.created_at,r.name`,[req.params.id]);
+    res.json(rows);
+  }));
+  app.post('/api/inboxes/:id/rules',wrap(async(req:any,res:any)=>{
+    if(!admin(req,res))return;if(!await memberOf(req.params.id,req.actor.id))return res.sendStatus(404);
+    const r=ruleBody.parse(req.body);
+    try{await checkRefs(req.params.id,r)}catch(e:any){return res.status(400).json({error:e.message})}
+    const {rows}=await pool.query(`INSERT INTO automation_rules(inbox_id,name,match_subject,match_from,assignee_id,action_status,tag_id,enabled,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,[req.params.id,r.name,r.matchSubject,r.matchFrom,r.assigneeId,r.status,r.tagId,r.enabled,req.actor.id]);
+    res.status(201).json(rows[0]);
+  }));
+  app.put('/api/rules/:rid',wrap(async(req:any,res:any)=>{
+    if(!admin(req,res))return;if(!uuid.safeParse(req.params.rid).success)return res.sendStatus(404);
+    const cur=(await pool.query('SELECT inbox_id FROM automation_rules WHERE id=$1',[req.params.rid])).rows[0];
+    if(!cur||!await memberOf(cur.inbox_id,req.actor.id))return res.sendStatus(404);
+    const r=ruleBody.parse(req.body);
+    try{await checkRefs(cur.inbox_id,r)}catch(e:any){return res.status(400).json({error:e.message})}
+    await pool.query(`UPDATE automation_rules SET name=$1,match_subject=$2,match_from=$3,assignee_id=$4,action_status=$5,tag_id=$6,enabled=$7 WHERE id=$8`,
+      [r.name,r.matchSubject,r.matchFrom,r.assigneeId,r.status,r.tagId,r.enabled,req.params.rid]);
+    res.json({ok:true});
+  }));
+  app.delete('/api/rules/:rid',wrap(async(req:any,res:any)=>{
+    if(!admin(req,res))return;if(!uuid.safeParse(req.params.rid).success)return res.sendStatus(404);
+    const cur=(await pool.query('SELECT inbox_id FROM automation_rules WHERE id=$1',[req.params.rid])).rows[0];
+    if(!cur||!await memberOf(cur.inbox_id,req.actor.id))return res.sendStatus(404);
+    await pool.query('DELETE FROM rule_applied WHERE rule_id=$1',[req.params.rid]);
+    await pool.query('DELETE FROM automation_rules WHERE id=$1',[req.params.rid]);res.json({ok:true});
   }));
 
   // ---------- settings ----------

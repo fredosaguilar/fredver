@@ -106,10 +106,10 @@ app.get('/api/inboxes/:id/counts',wrap(async(req:any,res:any)=>{
   res.json({...rows[0],byAssignee:Object.fromEntries(team.rows.map(r=>[r.assignee_id,r.n]))});
 }));
 
-const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent','overdue','tag','search'] as const;
+const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent','overdue','tag','search','day'] as const;
 app.get('/api/threads',wrap(async(req:any,res:any)=>{
   const input=z.object({inboxId:z.string().uuid(),view:z.enum(VIEWS).default('all'),assigneeId:z.string().uuid().optional(),tagId:z.string().uuid().optional(),
-    ids:z.string().max(2000).optional(),q:z.string().trim().max(200).optional()}).parse(req.query);
+    ids:z.string().max(2000).optional(),day:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),q:z.string().trim().max(200).optional()}).parse(req.query);
   const ids=(input.ids||'').split(',').filter(x=>/^[0-9a-f]{6,32}$/i.test(x)).slice(0,50);
   if(input.view==='assignee'&&!input.assigneeId)return res.status(400).json({error:'assigneeId required'});
   const q=input.q?'%'+input.q.replace(/[\\%_]/g,m=>'\\'+m)+'%':null;
@@ -131,10 +131,11 @@ app.get('/api/threads',wrap(async(req:any,res:any)=>{
       OR ($3::text='sent' AND s.sent_at IS NOT NULL) OR t.status=$3::text
       OR ($3::text='overdue' AND ((t.status<>'closed' AND t.due_at IS NOT NULL AND t.due_at<now()) OR (t.status='open' AND t.due_at IS NULL AND t.awaiting_reply AND t.last_client_message_at < now()-make_interval(hours=>i.sla_hours))))
       OR ($3::text='tag' AND EXISTS(SELECT 1 FROM thread_tags x WHERE x.thread_id=t.id AND x.tag_id=$6::uuid))
-      OR ($3::text='search' AND t.gmail_thread_id=ANY($7::text[])))
+      OR ($3::text='search' AND t.gmail_thread_id=ANY($7::text[]))
+      OR ($3::text='day' AND (t.first_message_at AT TIME ZONE 'America/Los_Angeles')::date=$8::date))
     AND ($4::text IS NULL OR t.subject ILIKE $4 OR t.from_email ILIKE $4 OR t.from_name ILIKE $4 OR t.snippet ILIKE $4)
     ORDER BY CASE WHEN $3::text='sent' THEN s.sent_at END DESC NULLS LAST,CASE WHEN $3::text='overdue' THEN coalesce(t.due_at,t.last_client_message_at+make_interval(hours=>i.sla_hours)) END ASC,t.last_message_at DESC NULLS LAST,t.updated_at DESC LIMIT 200`,
-    [req.actor.id,input.inboxId,input.view,q,input.assigneeId??null,input.tagId??null,ids]);
+    [req.actor.id,input.inboxId,input.view,q,input.assigneeId??null,input.tagId??null,ids,input.day??null]);
   res.json(rows);
 }));
 
@@ -225,7 +226,7 @@ app.patch('/api/threads/:id',wrap(async(req:any,res:any)=>{
   }
   const hasAssignee=Object.prototype.hasOwnProperty.call(input,'assigneeId');
   if(input.dueAt!==undefined){
-    await pool.query('UPDATE threads SET due_at=$1,updated_at=now() WHERE id=$2',[input.dueAt,t.id]);
+    await pool.query('UPDATE threads SET due_at=$1,due_notified_at=NULL,updated_at=now() WHERE id=$2',[input.dueAt,t.id]);
     await audit(req.actor.id,t.id,'thread.due',{to:input.dueAt});
     if(input.status===undefined&&!hasAssignee)return res.json({id:t.id,due_at:input.dueAt});
   }
@@ -268,7 +269,7 @@ app.post('/api/admin/sync',wrap(async(req:any,res:any)=>{
 }));
 
 app.use((err:any,_req:any,res:any,_next:any)=>{
-  if(err instanceof z.ZodError)return res.status(400).json({error:'Invalid request',issues:err.issues});
+  if(err instanceof z.ZodError){const i=err.issues[0];return res.status(400).json({error:i?.code==='custom'?i.message:'Invalid request'+(i?.path?.length?` (${i.path.join('.')})`:''),issues:err.issues})}
   if(err instanceof GmailError)return res.status(err.status).json({error:err.message});
   console.error(err);res.status(500).json({error:'Internal error'});
 });

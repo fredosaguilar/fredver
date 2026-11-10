@@ -2,6 +2,7 @@ import {pool} from './db.js';
 import {syncInbox} from './sync.js';
 import {startWatch} from './gmail.js';
 import {processScheduled} from './scheduled.js';
+import {notifyDue} from './features.js';
 // Renew the Gmail push-notification watch, then sync. A failed renewal (e.g. the Pub/Sub topic is not yet
 // allowed to receive Gmail notifications) must never stop the sync itself.
 if(process.env.WATCH_TOPIC){
@@ -10,6 +11,7 @@ if(process.env.WATCH_TOPIC){
 }
 // Send anything scheduled that is due (also done by the API while Fredver is open).
 try{let n=0;do{n=await processScheduled(10)}while(n===10)}catch(e){console.error('scheduled processing failed',e)}
+try{await notifyDue()}catch(e){console.error('due notifications failed',e)}
 const r=await syncInbox({maxThreads:Number(process.env.SYNC_MAX_THREADS||100)});
 console.log(JSON.stringify({event:'sync.done',...r}));
 await pool.end();
