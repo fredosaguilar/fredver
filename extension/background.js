@@ -52,14 +52,14 @@ async function download(path){
 // ---------- desktop notifications ----------
 // Every minute, check for new Fredver notifications (assigned, @mentioned, client replied, draft review)
 // and show them as Chrome notifications. Clicking one opens the conversation in Gmail.
-const TEXT={scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
+const TEXT={due:n=>'Due now',scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
   reply:n=>`New reply from ${n.detail||'a client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
 async function pollNotifications(){
   const {idToken}=await saved();if(!idToken)return;
   let data;try{data=await api({path:'/api/notifications'})}catch{return}
-  const {lastNotified=0}=await chrome.storage.local.get('lastNotified');
+  const {lastNotified=0,notifyOff=false}=await chrome.storage.local.get(['lastNotified','notifyOff']);
   const fresh=data.items.filter(n=>!n.read_at&&n.id>lastNotified).slice(0,5).reverse();
-  for(const n of fresh)chrome.notifications.create('fredver|'+n.id+'|'+(n.thread_id||''),{type:'basic',iconUrl:'icons/icon128.png',
+  if(!notifyOff)for(const n of fresh)chrome.notifications.create('fredver|'+n.id+'|'+(n.thread_id||''),{type:'basic',iconUrl:'icons/icon128.png',
     title:(TEXT[n.kind]||TEXT.assigned)(n),message:(n.subject||'')+(n.kind==='mention'&&n.detail?'\n“'+n.detail.slice(0,120)+'”':''),priority:1});
   const max=Math.max(lastNotified,...data.items.map(n=>n.id));
   if(max>lastNotified)await chrome.storage.local.set({lastNotified:max});
@@ -82,6 +82,8 @@ chrome.runtime.onMessage.addListener((m,_sender,reply)=>{
     if(m.type==='auth'){await signIn(true);return {ok:true}}
     if(m.type==='signout'){await chrome.storage.session.clear();return {ok:true}}
     if(m.type==='api')return {data:await api(m)};
+    if(m.type==='testNotify'){await chrome.notifications.create('fredver-test-'+Date.now(),{type:'basic',iconUrl:'icons/icon128.png',
+      title:'Fredver notifications are working',message:"You'll see alerts like this for assignments, @mentions, client replies and due dates.",priority:1});return {ok:true}}
     if(m.type==='download')return {data:await download(m.path)};
     if(m.type==='view'){await chrome.tabs.create({url:chrome.runtime.getURL('viewer.html')+'?p='+encodeURIComponent(m.path)});return {ok:true}}
     throw Error('Unknown command');

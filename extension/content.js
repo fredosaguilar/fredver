@@ -1,7 +1,7 @@
 (()=>{
 if(window.__fredvir)return;window.__fredvir=true;
 
-const VIEWS=[['unassigned','Unassigned'],['mine','Assigned to me'],['open','Open'],['pending','Pending'],['overdue','Overdue'],['closed','Closed'],['sent','Sent'],['all','All conversations'],['tag','Tag'],['search','Search results']];
+const VIEWS=[['unassigned','Unassigned'],['mine','Assigned to me'],['open','Open'],['pending','Pending'],['overdue','Overdue'],['closed','Closed'],['sent','Sent'],['all','All conversations'],['tag','Tag'],['search','Search results'],['day','Received']];
 const S={signedIn:false,email:'',me:null,signature:null,inboxes:[],inbox:null,view:'unassigned',viewAssignee:null,compose:null,q:'',threads:[],counts:{},members:[],open:false,
   threadId:null,detail:null,expanded:new Set(),replying:false,reply:null,listLoading:false,error:'',
   viewTag:null,tags:[],templates:[],notifs:{unread:0,items:[]},panel:null,report:null,team:null,settings:null,searchIds:[],prevView:'unassigned',menu:null};
@@ -40,21 +40,26 @@ const STATUS={open:'Open',pending:'Pending',closed:'Closed'};
 
 const BASE=`:host{all:initial}
 *{box-sizing:border-box}
-:host{--g:#164536;--g2:#1f6b52;--gl:#e3efe9;--ink:#202124;--mut:#5f6368;--line:#e0e3e7;--bg:#fff;--soft:#f6f8fc;--warn:#fef7e0;--warnink:#7a4b00;
-  --open:#1a73e8;--pending:#e37400;--closed:#5f6368;font:14px/1.4 "Google Sans",Roboto,Arial,sans-serif;color:var(--ink)}
+:host{--g:#1d4a3b;--g2:#2a6550;--gl:#e3efe8;--onG:#fff;--gold:#b5872c;--goldl:#f7eedb;--cream:#faf7f0;--ink:#1f2a26;--mut:#5d6964;--line:#e1e6e3;
+  --bg:#fff;--card:#fff;--soft:#f5f7f6;--chip:#eef1ef;--hover:var(--hover);--warn:#fdf3dc;--warnink:#7a5200;--open:#1a73e8;--pending:#b86200;--closed:var(--mut);
+  --danger:var(--danger);--dangerl:var(--dangerl);--info:var(--info);--infol:var(--infol);--shadow:#00000022;
+  font:14px/1.4 "Google Sans",Roboto,Arial,sans-serif;color:var(--ink);color-scheme:light}
+:host([data-theme=dark]){--g:#86cdb0;--g2:#a6dcc6;--gl:#1f3a31;--onG:#0f1d18;--gold:#e2b65c;--goldl:#3a311d;--cream:#161d1a;--ink:#e5ebe8;--mut:#a2afaa;--line:#33403b;
+  --bg:#131917;--card:#1b2320;--soft:#18201d;--chip:#25302c;--hover:#ffffff14;--warn:#3a3118;--warnink:#f2d48c;--open:#8ab4f8;--pending:#f2a54b;--closed:#9aa0a6;
+  --danger:#f28b82;--dangerl:#3c201e;--info:#a8c7fa;--infol:#1d2b45;--shadow:#00000066;color-scheme:dark}
 button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
 button:disabled{opacity:.5;cursor:default}
 .icon{width:36px;height:36px;border-radius:50%;display:inline-grid;place-items:center;color:var(--mut)}
-.icon:hover{background:#0000000f}
-.btn{background:var(--g);color:#fff;padding:8px 16px;border-radius:18px;font-weight:500}
+.icon:hover{background:var(--hover)}
+.btn{background:var(--g);color:var(--onG);padding:8px 16px;border-radius:18px;font-weight:500}
 .btn:hover{background:var(--g2)}
 .btn.ghost{background:transparent;color:var(--g);border:1px solid var(--line)}
 .btn.ghost:hover{background:var(--gl)}
-input,select,textarea{font:inherit;color:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff;width:100%}
+input,select,textarea{font:inherit;color:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--card);width:100%}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--g);outline-offset:-1px;border-color:transparent}
 .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:500;white-space:nowrap}
-.pill.open{background:#e8f0fe;color:var(--open)}.pill.pending{background:#fef0e0;color:var(--pending)}.pill.closed{background:#f1f3f4;color:var(--closed)}
-.err{background:#fce8e6;color:#a50e0e;padding:8px 12px;border-radius:8px;margin:8px 0;font-size:13px}`;
+.pill.open{background:var(--infol);color:var(--open)}.pill.pending{background:var(--warn);color:var(--pending)}.pill.closed{background:var(--chip);color:var(--closed)}
+.err{background:var(--dangerl);color:var(--danger);padding:8px 12px;border-radius:8px;margin:8px 0;font-size:13px}`;
 
 // ---------- left sidebar section (inside Gmail's label list, styled like Gmail's own rows) ----------
 const navHost=h('div',{id:'fredvir-nav'});const nav=navHost.attachShadow({mode:'open'});
@@ -76,13 +81,13 @@ const NAV_ICON={
   team:'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z'};
 const NAV_LABEL={unassigned:'Unassigned',mine:'Mine',open:'Open',pending:'Pending',overdue:'Overdue',closed:'Closed',sent:'Sent',all:'All conversations'};
 const NAVCSS=BASE+`
-:host{display:block;font:14px/20px "Google Sans",Roboto,Arial,sans-serif;color:#1f1f1f}
+:host{display:block;font:14px/20px "Google Sans",Roboto,Arial,sans-serif;color:var(--ink)}
 .sec{padding:4px 0 8px}
-.row{display:flex;align-items:center;width:calc(100% - 12px);height:32px;border-radius:16px;font-size:14px;color:#1f1f1f;text-align:left;padding-right:12px;gap:0}
-.row:hover{background:#0000000f}
-.row.on{background:#d3e9de;font-weight:700;color:#0b3326}
-.row svg{width:20px;height:20px;flex:none;color:#444746}
-.row.on svg{color:#0b3326}
+.row{display:flex;align-items:center;width:calc(100% - 12px);height:32px;border-radius:16px;font-size:14px;color:var(--ink);text-align:left;padding-right:12px;gap:0}
+.row:hover{background:var(--hover)}
+.row.on{background:var(--gl);font-weight:700;color:var(--g)}
+.row svg{width:20px;height:20px;flex:none;color:var(--mut)}
+.row.on svg{color:var(--g)}
 .row .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .n{font-size:12px;letter-spacing:.3px;margin-left:8px}
 .row .n.b{font-weight:700}
@@ -91,23 +96,23 @@ const NAVCSS=BASE+`
 .top .chev svg{width:18px;height:18px}
 .top .ic{margin-right:16px}
 .top .t{font-weight:500}
-.top .brand{font-size:11px;font-weight:700;letter-spacing:.06em;color:#164536;background:#d3e9de;border-radius:8px;padding:0 6px;margin-left:6px}
+.top .brand{font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--g);background:var(--gl);border-radius:8px;padding:0 6px;margin-left:6px}
 .kid{margin-left:12px;width:calc(100% - 24px);padding-left:30px}
 .kid svg{margin-right:14px;width:18px;height:18px}
 .kid2{margin-left:12px;width:calc(100% - 24px);padding-left:62px}
-.av{width:20px;height:20px;border-radius:50%;background:#164536;color:#fff;font-size:9px;display:inline-grid;place-items:center;font-weight:700;margin-right:10px;flex:none}
-.signin{margin:4px 0 4px 42px;background:#164536;color:#fff;padding:6px 16px;border-radius:16px;font-weight:500}
-.msg{margin:4px 16px 4px 42px;font-size:12px;color:#a50e0e;line-height:16px}
-.acct{display:flex;align-items:center;gap:6px;margin:6px 16px 0 42px;font-size:12px;color:#5f6368}
+.av{width:20px;height:20px;border-radius:50%;background:var(--g);color:var(--onG);font-size:9px;display:inline-grid;place-items:center;font-weight:700;margin-right:10px;flex:none}
+.signin{margin:4px 0 4px 42px;background:var(--g);color:var(--onG);padding:6px 16px;border-radius:16px;font-weight:500}
+.msg{margin:4px 16px 4px 42px;font-size:12px;color:var(--danger);line-height:16px}
+.acct{display:flex;align-items:center;gap:6px;margin:6px 16px 0 42px;font-size:12px;color:var(--mut)}
 .acct span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.acct button{color:#164536;font-weight:600;font-size:12px;white-space:nowrap}
+.acct button{color:var(--g);font-weight:600;font-size:12px;white-space:nowrap}
 .inbox{margin:2px 16px 4px 42px;width:calc(100% - 58px);padding:3px 6px;font-size:13px}
-.row.red .t,.row.red .n{color:#c5221f}
+.row.red .t,.row.red .n{color:var(--danger)}
 .dot{width:10px;height:10px;border-radius:50%;margin:0 14px 0 4px;flex:none}
-.hint2{color:#5f6368;font-size:12px;height:auto;padding-top:4px;padding-bottom:4px}
-.badge{background:#c5221f;color:#fff;border-radius:10px;font-size:11px;font-weight:700;padding:0 6px;margin-left:8px}
-.sep{height:1px;background:#e0e3e7;margin:6px 16px 6px 42px}
-.float{position:fixed;left:12px;bottom:12px;width:256px;background:#fff;border-radius:16px;box-shadow:0 4px 24px #0003;z-index:2147483000;padding:8px 0}`;
+.hint2{color:var(--mut);font-size:12px;height:auto;padding-top:4px;padding-bottom:4px}
+.badge{background:var(--danger);color:var(--onG);border-radius:10px;font-size:11px;font-weight:700;padding:0 6px;margin-left:8px}
+.sep{height:1px;background:var(--line);margin:6px 16px 6px 42px}
+.float{position:fixed;left:12px;bottom:12px;width:256px;background:var(--card);border-radius:16px;box-shadow:0 4px 24px #0003;z-index:2147483000;padding:8px 0}`;
 
 // Gmail's sidebar is found by its Inbox link (role="navigation" also matches the narrow Mail/Chat/Meet
 // rail). Fredver sits right after the block of Gmail's system labels (Inbox, Starred, Sent, Drafts…),
@@ -157,7 +162,7 @@ function renderNav(){
   }else if(S.authError){
     wrap.append(h('div',{class:'msg'},S.authError));
   }else if(!S.inboxes.length){
-    wrap.append(h('div',{class:'msg',style:'color:#5f6368'},'Loading…'));
+    wrap.append(h('div',{class:'msg',style:'color:var(--mut)'},'Loading…'));
   }else{
     if(S.inboxes.length>1)wrap.append(h('select',{class:'inbox','aria-label':'Shared inbox',onchange:e=>{S.inbox=S.inboxes.find(i=>i.id===e.target.value);loadInbox()}},
       S.inboxes.map(i=>h('option',{value:i.id,selected:i.id===S.inbox?.id},i.name))));
@@ -178,7 +183,7 @@ function renderNav(){
     {
       wrap.append(h('button',{class:'row kid','aria-expanded':String(teamOpen),onclick:()=>{teamOpen=!teamOpen;store.set('team',teamOpen?'1':'0');renderNav()}},
         svg(NAV_ICON.team),h('span',{class:'t'},'Team'),svg(teamOpen?NAV_ICON.chevD:NAV_ICON.chevR)));
-      if(teamOpen&&S.members.length<2)wrap.append(h('div',{class:'row kid2',style:'color:#5f6368;font-size:12px;height:auto;padding-top:4px;padding-bottom:4px'},'Only you so far. Teammates appear here once they are added.'));
+      if(teamOpen&&S.members.length<2)wrap.append(h('div',{class:'row kid2',style:'color:var(--mut);font-size:12px;height:auto;padding-top:4px;padding-bottom:4px'},'Only you so far. Teammates appear here once they are added.'));
       if(teamOpen)for(const m of S.members){
         const n=S.counts.byAssignee?.[m.id],nm=m.display_name||m.email;
         wrap.append(h('button',{class:'row kid2'+(active('assignee',m.id)?' on':''),title:'Open conversations assigned to '+nm,onclick:()=>openView('assignee',m.id)},
@@ -191,7 +196,7 @@ function renderNav(){
     wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='notifications'?' on':''),onclick:()=>openPanel('notifications')},svg(NAV_ICON.bell),h('span',{class:'t'},'Notifications'),
       S.notifs.unread?h('span',{class:'badge'},S.notifs.unread):null));
     wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='reports'?' on':''),onclick:()=>openPanel('reports')},svg(NAV_ICON.chart),h('span',{class:'t'},'Reports')));
-    if(S.me?.role==='admin')wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='settings'?' on':''),onclick:()=>openPanel('settings')},svg(NAV_ICON.gear),h('span',{class:'t'},'Settings')));
+    wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='settings'?' on':''),onclick:()=>openPanel('settings')},svg(NAV_ICON.gear),h('span',{class:'t'},'Settings')));
   }
   if(S.signedIn)wrap.append(h('div',{class:'acct'},h('span',{title:S.email},S.email),h('button',{onclick:switchAccount},'Switch account')));
   nav.replaceChildren(h('style',{},NAVCSS),wrap);
@@ -201,14 +206,14 @@ function renderNav(){
 const mainHost=h('div',{id:'fredvir-main'});mainHost.style.cssText='position:fixed;z-index:2147482000;display:none';
 const main=mainHost.attachShadow({mode:'open'});document.documentElement.append(mainHost);
 const MAINCSS=BASE+`
-.pane{position:absolute;inset:0;background:var(--bg);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 1px 3px #0002}
+.pane{position:absolute;inset:0;background:var(--bg);color:var(--ink);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 1px 3px #0002}
 .bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);min-height:56px}
 .bar h2{font-size:18px;font-weight:500;margin:0 8px 0 4px;white-space:nowrap}
 .bar .sub{color:var(--mut);font-size:13px;white-space:nowrap}
 .bar .search{max-width:360px;margin-left:auto;border-radius:20px;background:var(--soft);border-color:transparent}
 .list{flex:1;overflow:auto}
-.row{display:grid;grid-template-columns:200px 1fr auto 72px;gap:12px;align-items:center;padding:0 16px;height:44px;border-bottom:1px solid #f1f3f4;cursor:pointer;width:100%;text-align:left}
-.row:hover{box-shadow:inset 1px 0 0 #dadce0,inset -1px 0 0 #dadce0,0 1px 2px #3c40434d;position:relative;z-index:1}
+.row{display:grid;grid-template-columns:200px 1fr auto 72px;gap:12px;align-items:center;padding:0 16px;height:44px;border-bottom:1px solid var(--chip);cursor:pointer;width:100%;text-align:left}
+.row:hover{box-shadow:inset 1px 0 0 var(--line),inset -1px 0 0 var(--line),0 1px 2px var(--mut)4d;position:relative;z-index:1}
 .row .from{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .from small{font-weight:400;color:var(--mut);margin-left:4px}
 .row .subj{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -216,14 +221,14 @@ const MAINCSS=BASE+`
 .row .meta{display:flex;gap:6px;align-items:center}
 .row .time{text-align:right;font-size:12px;color:var(--mut);font-weight:600}
 .row .subj .s{font-weight:400}
-.row:not(.unread){background:#f6f8fc}
+.row:not(.unread){background:var(--soft)}
 .row:not(.unread) .from{font-weight:400}
 .row.unread .subj .s{font-weight:700}
 .tagc{display:inline-block;font-size:11px;font-weight:600;border:1px solid;border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px}
 .sla{font-size:11px;font-weight:700;border-radius:10px;padding:1px 8px;white-space:nowrap}
-.sla.over{background:#fce8e6;color:#c5221f}.sla.soon{background:#fef0e0;color:#b06000}.sla.due{background:#e8f0fe;color:#174ea6}
-.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:#f1f3f4;border-radius:10px;padding:1px 8px 1px 2px;white-space:nowrap}
-.av{width:18px;height:18px;border-radius:50%;background:var(--g);color:#fff;font-size:9px;display:inline-grid;place-items:center;font-weight:600}
+.sla.over{background:var(--dangerl);color:var(--danger)}.sla.soon{background:var(--warn);color:var(--pending)}.sla.due{background:var(--infol);color:var(--info)}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:var(--chip);border-radius:10px;padding:1px 8px 1px 2px;white-space:nowrap}
+.av{width:18px;height:18px;border-radius:50%;background:var(--g);color:var(--onG);font-size:9px;display:inline-grid;place-items:center;font-weight:600}
 .chip.none{padding:1px 8px;color:var(--mut);background:transparent;border:1px dashed var(--line)}
 .empty{padding:64px 24px;text-align:center;color:var(--mut)}
 .empty strong{display:block;color:var(--ink);font-size:16px;margin-bottom:4px}
@@ -233,7 +238,7 @@ const MAINCSS=BASE+`
 .banner{background:var(--warn);color:var(--warnink);padding:8px 12px;border-radius:8px;margin:12px 0;font-size:13px;font-weight:500}
 .msg{border-bottom:1px solid var(--line);padding:12px 0}
 .msg .head{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
-.msg .bigav{width:36px;height:36px;border-radius:50%;background:#7b8a84;color:#fff;display:grid;place-items:center;font-weight:600;flex:none}
+.msg .bigav{width:36px;height:36px;border-radius:50%;background:#7b8a84;color:var(--onG);display:grid;place-items:center;font-weight:600;flex:none}
 .msg .bigav.us{background:var(--g)}
 .msg .who{flex:1;min-width:0}
 .msg .who b{font-weight:600}
@@ -242,27 +247,28 @@ const MAINCSS=BASE+`
 .msg .date{color:var(--mut);font-size:12px;white-space:nowrap}
 .msg .snip{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .msg .body{margin:12px 0 0 48px}
-.msg iframe{width:100%;border:0;min-height:40px;display:block}
+.msg iframe{width:100%;border:0;min-height:40px;display:block;background:#fff;border-radius:8px}
+:host([data-theme=dark]) .msg iframe{padding:10px}
 .msg pre{white-space:pre-wrap;word-wrap:break-word;font:inherit;margin:0}
 .atts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0 48px}
 .att{display:inline-flex;gap:4px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12px;color:var(--mut)}
-.attwrap{margin:16px 0 4px 48px;padding-top:12px;border-top:1px solid #f1f3f4}
+.attwrap{margin:16px 0 4px 48px;padding-top:12px;border-top:1px solid var(--chip)}
 .atthead{display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:14px}
 .attgrid{display:flex;flex-wrap:wrap;gap:16px}
-.attcard{position:relative;width:180px;height:122px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#fff}
+.attcard{position:relative;width:180px;height:122px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--card)}
 .attmain{display:block;width:100%;height:100%;padding:0;text-align:left}
-.attprev{height:86px;background:#f1f3f4;display:grid;place-items:center;overflow:hidden}
+.attprev{height:86px;background:var(--chip);display:grid;place-items:center;overflow:hidden}
 .attprev img{width:100%;height:100%;object-fit:cover;object-position:top}
 .bigkind{font-size:22px;font-weight:700;letter-spacing:.05em}
-.attfoot{height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid var(--line);background:#f8f9fa}
+.attfoot{height:36px;display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid var(--line);background:var(--soft)}
 .attfoot .kind{color:#fff;font-size:9px;font-weight:700;border-radius:3px;padding:2px 4px;flex:none}
-.attfoot .nm{font-size:13px;font-weight:500;color:#5f6368;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attfoot .nm{font-size:13px;font-weight:500;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .atthover{position:absolute;inset:0;background:#202124d9;color:#fff;display:none;flex-direction:column;padding:12px;gap:2px;pointer-events:none}
 .attcard:hover .atthover,.attcard:focus-within .atthover{display:flex}
 .atthover .nm{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.atthover small{color:#dadce0}
+.atthover small{color:var(--line)}
 .atthover .acts{margin-top:auto;display:flex;gap:8px;pointer-events:auto}
-.atthover .acts button{width:32px;height:32px;border-radius:50%;background:#ffffff26;color:#fff;font-size:15px}
+.atthover .acts button{width:32px;height:32px;border-radius:50%;background:#ffffff26;color:var(--onG);font-size:15px}
 .atthover .acts button:hover{background:#ffffff4d}
 .att svg{width:14px;height:14px}
 .att small{color:var(--mut);margin-left:4px}
@@ -281,15 +287,15 @@ const MAINCSS=BASE+`
 .compose textarea{min-height:260px;margin-top:8px;resize:vertical}
 .compose .acts{display:flex;gap:8px;margin-top:12px}
 select.plain{border:0;background:transparent;padding:4px 2px;width:auto;max-width:100%;font-weight:500;cursor:pointer}
-select.plain:hover{background:#0000000a}
-.link{color:#0b57d0;font-size:13px;padding:2px 4px}
+select.plain:hover{background:var(--hover)}
+.link{color:var(--info);font-size:13px;padding:2px 4px}
 .link:hover{text-decoration:underline}
 .replybtns{display:flex;gap:10px;margin:16px 0 0 48px}
 .replybtns .btn{border-radius:18px;padding:8px 20px}
-.reply{margin:16px 0 0;border-radius:12px;box-shadow:0 1px 2px #3c40434d,0 2px 6px 2px #3c404326;background:#fff;position:relative}
+.reply{margin:16px 0 0;border-radius:12px;box-shadow:0 1px 2px var(--mut)4d,0 2px 6px 2px var(--mut)26;background:var(--card);position:relative}
 .reply>.rbanner{border-radius:12px 12px 0 0}
-.rbanner{background:#fdf1e8;color:#7a3e00;font-size:12px;padding:8px 14px;border-bottom:1px solid #f6dcc7}
-.rbanner.me{background:#e8f0fe;color:#174ea6;border-color:#d2e3fc}
+.rbanner{background:var(--goldl);color:var(--warnink);font-size:12px;padding:8px 14px;border-bottom:1px solid var(--line)}
+.rbanner.me{background:var(--infol);color:var(--info);border-color:var(--line)}
 .rhead{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border-bottom:1px solid var(--line)}
 .rhead .mode{width:auto;border:0;font-weight:600;padding:4px;cursor:pointer;background:transparent}
 .rhead .from{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:13px;flex:1;min-width:0}
@@ -307,31 +313,31 @@ select.plain:hover{background:#0000000a}
 .compose .sigbox{padding:6px 0;border:0}
 .sigtoggle{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--mut);padding:4px 0}
 .sigtoggle input{width:auto}
-.sigprev{width:100%;border:0;display:block;min-height:40px;opacity:.85}
-.tb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line);background:#fafbfc}
+.sigprev{width:100%;border:0;display:block;min-height:40px;opacity:.9;background:#fff;border-radius:6px}
+.tb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;padding:4px 10px;border-bottom:1px solid var(--line);background:var(--soft)}
 .compose .tb{border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;margin-top:8px}
-.tbb{padding:4px 8px;border-radius:4px;font-size:13px;color:#3c4043}
-.tbb:hover{background:#e8eaed}
+.tbb{padding:4px 8px;border-radius:4px;font-size:13px;color:var(--mut)}
+.tbb:hover{background:var(--chip)}
 .tplwrap{position:relative;margin-left:auto}
 .tplbtn{font-weight:600;color:var(--g)}
 .menu[hidden]{display:none}
-.menu{position:absolute;right:0;bottom:100%;margin-bottom:4px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px #0003;min-width:260px;max-height:320px;overflow:auto;z-index:5;padding:4px 0}
+.menu{position:absolute;right:0;bottom:100%;margin-bottom:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px #0003;min-width:260px;max-height:320px;overflow:auto;z-index:5;padding:4px 0}
 .mi{display:flex;align-items:center}
-.mit{flex:1;text-align:left;padding:8px 12px;font-size:13px}.mit:hover{background:#f1f3f4}
-.mix{padding:4px 10px;color:var(--mut)}.mix:hover{color:#c5221f}
+.mit{flex:1;text-align:left;padding:8px 12px;font-size:13px}.mit:hover{background:var(--chip)}
+.mix{padding:4px 10px;color:var(--mut)}.mix:hover{color:var(--danger)}
 .mia{display:block;width:100%;text-align:left;padding:8px 12px;font-size:13px;color:var(--g);font-weight:600;border-top:1px solid var(--line)}
 .mie{padding:8px 12px;font-size:12px;color:var(--mut)}.mie.small{font-size:11px;border-top:1px solid var(--line)}
 .ed{min-height:150px;padding:12px 14px;outline:none;font-size:14px;line-height:1.5;overflow-wrap:anywhere}
 .compose .ed{min-height:240px;border:1px solid var(--line);border-radius:0 0 8px 8px}
-.ed.empty:before{content:attr(data-ph);color:#80868b;pointer-events:none}
-.ed ul,.ed ol{margin:4px 0;padding-left:24px}.ed a{color:#0b57d0}
+.ed.empty:before{content:attr(data-ph);color:var(--mut);pointer-events:none}
+.ed ul,.ed ol{margin:4px 0;padding-left:24px}.ed a{color:var(--info)}
 .review{width:auto;border-radius:18px;padding:6px 10px;font-size:13px}
 .saved{font-size:12px;color:var(--mut);align-self:center}
-.draftbar{display:flex;align-items:center;gap:12px;justify-content:space-between;background:#e8f0fe;color:#174ea6;border-radius:8px;padding:8px 12px;margin:16px 0 0 48px;font-size:13px;font-weight:500}
-.linkbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:#f1f3f4;color:#3c4043;border-radius:8px;padding:8px 12px;margin:0 0 8px;font-size:13px}
-.slaline{font-size:12px;font-weight:600;border-radius:6px;padding:6px 8px;margin-top:8px}.slaline.over{background:#fce8e6;color:#c5221f}.slaline.soon{background:#fef0e0;color:#b06000}.slaline.due{background:#e8f0fe;color:#174ea6}
+.draftbar{display:flex;align-items:center;gap:12px;justify-content:space-between;background:var(--infol);color:var(--info);border-radius:8px;padding:8px 12px;margin:16px 0 0 48px;font-size:13px;font-weight:500}
+.linkbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:var(--chip);color:var(--mut);border-radius:8px;padding:8px 12px;margin:0 0 8px;font-size:13px}
+.slaline{font-size:12px;font-weight:600;border-radius:6px;padding:6px 8px;margin-top:8px}.slaline.over{background:var(--dangerl);color:var(--danger)}.slaline.soon{background:var(--warn);color:var(--pending)}.slaline.due{background:var(--infol);color:var(--info)}
 .duein{width:auto;padding:3px 6px;font-size:12px}
-.draftbar.bad{background:#fce8e6;color:#a50e0e}
+.draftbar.bad{background:var(--dangerl);color:var(--danger)}
 .menu.up{bottom:100%;top:auto;right:0}
 .schedwrap{margin-left:0}
 .menu.up{min-width:360px}.mit.sched{display:flex;justify-content:space-between;gap:16px;white-space:nowrap}
@@ -344,35 +350,78 @@ select.plain:hover{background:#0000000a}
 .tagx{color:inherit;opacity:.7;padding:0 4px;font-size:14px}.tagx:hover{opacity:1}
 .addtag{width:auto;padding:2px 6px;font-size:12px;border-style:dashed;border-radius:12px}
 .panel{padding:8px 24px 32px}
-.nrow{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:12px 8px;border-bottom:1px solid #f1f3f4}
-.nrow:hover{background:#f6f8fc}.nrow.unread{background:#eef5f1}.nrow .nt{flex:1;min-width:0;font-size:13px}.nrow .nq{color:var(--mut);margin-top:2px}
+.nrow{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:12px 8px;border-bottom:1px solid var(--chip)}
+.nrow:hover{background:var(--soft)}.nrow.unread{background:var(--gl)}.nrow .nt{flex:1;min-width:0;font-size:13px}.nrow .nq{color:var(--mut);margin-top:2px}
 .nk{width:28px;height:28px;border-radius:50%;background:var(--gl);color:var(--g);display:grid;place-items:center;font-weight:700;flex:none}
 .nrow .time{font-size:12px;color:var(--mut);white-space:nowrap}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin:12px 0}
-.card{border:1px solid var(--line);border-radius:12px;padding:14px}.card .cv{font-size:26px;font-weight:600}.card .ck{font-size:12px;color:var(--mut)}.card.bad .cv{color:#c5221f}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px}.card .cv{font-size:26px;font-weight:600}.card .ck{font-size:12px;color:var(--mut)}.card.bad .cv{color:var(--danger)}
 .rh{font-size:15px;font-weight:600;margin:24px 0 10px}
 .bars{display:flex;align-items:flex-end;gap:3px;height:140px;border-bottom:1px solid var(--line);padding-top:8px}
-.barw{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:0}
+.barw{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:0;padding:0;border-radius:4px}
+.barw:hover{background:var(--hover)}.barw:hover .bar1{background:var(--gold)}
+.bv{font-size:9px;color:var(--mut);margin-bottom:2px}
 .bar1{width:100%;background:var(--g2);border-radius:3px 3px 0 0;min-height:1px}.barw span{font-size:9px;color:var(--mut);margin-top:2px}
 .tbl{border-collapse:collapse;width:100%;font-size:13px}.tbl th{text-align:left;color:var(--mut);font-weight:500;border-bottom:1px solid var(--line);padding:6px 8px}
-.tbl td{padding:6px 8px;border-bottom:1px solid #f1f3f4}.tbl tr.off td{color:var(--mut)}
+.tbl td{padding:6px 8px;border-bottom:1px solid var(--chip)}.tbl tr.off td{color:var(--mut)}
 .cell{border:1px solid transparent;padding:4px 6px;width:auto}.cell:hover{border-color:var(--line)}
 .tog{display:flex;gap:6px;align-items:center}.tog input{width:auto}
 .addrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}.addrow input{width:auto;flex:1;min-width:160px}.addrow select{width:auto}
-.tpls{padding-left:18px;font-size:13px}.tpls li{margin:4px 0}
+.tpls{padding-left:18px;font-size:13px}.tpls li{margin:6px 0;display:flex;gap:8px;align-items:center}
+.set{border:1px solid var(--line);border-radius:14px;padding:4px 18px 16px;margin:14px 0;background:var(--card)}
+.set .rh{color:var(--g);border-bottom:2px solid var(--goldl);padding-bottom:8px}
+.seg3{display:inline-flex;background:var(--soft);border-radius:10px;padding:3px;gap:3px}.seg3 button{padding:6px 14px;border-radius:8px;font-weight:600;color:var(--mut)}
+.seg3 button.on{background:var(--card);color:var(--g);box-shadow:0 1px 2px var(--shadow)}
+.tpl-edit{display:flex;flex-direction:column;gap:8px;margin-top:8px}.ed-wrap{border:1px solid var(--line);border-radius:10px;overflow:visible;background:var(--card)}
+.tagedit{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}.tagline{display:flex;gap:8px;align-items:center}
+.tagline input[type=color]{width:34px;height:28px;padding:2px;border-radius:6px}.tagline .cell{max-width:240px}
+.rule{border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:10px;padding:10px 12px;margin:8px 0;display:grid;grid-template-columns:1fr auto;gap:4px 12px}
+.rule.off{opacity:.55;border-left-color:var(--line)}.rule-d{grid-column:1;font-size:13px;color:var(--mut)}.rule-a{grid-row:1/3;grid-column:2;display:flex;gap:10px;align-items:center}
+.chipq{background:var(--chip);color:var(--ink);border-radius:6px;padding:1px 6px;font-size:12px}
+.rule-form{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:8px;display:flex;flex-direction:column;gap:10px;background:var(--soft)}
+.rule-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--mut)}
+.rule-form .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rule-form .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 .btn.close{background:#1e8e3e}.btn.close:hover{background:#188038}
-.side{width:320px;flex:none;border-left:1px solid var(--line);overflow:auto;padding:16px;background:#fff}
-.side h3{font-size:14px;font-weight:600;color:var(--ink);margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--line)}
-.props{display:grid;grid-template-columns:88px 1fr;row-gap:6px;align-items:center;font-size:13px}
-.props .k{color:var(--mut)}
-.props .v{display:flex;align-items:center;gap:6px;font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.props .v svg{width:16px;height:16px;color:var(--mut);flex:none}
-select.st.open{color:var(--open)}select.st.pending{color:var(--pending)}select.st.closed{color:var(--closed)}
-.notebox{border:1px solid var(--line);border-radius:8px;padding:6px;margin-bottom:10px;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
-.notebox textarea{border:0;min-height:56px;padding:4px}
-.notebox textarea:focus{outline:none}
-.side .btn{padding:5px 14px;font-size:13px}
-.note{background:#fff8d6;border:1px solid #f3e3a1;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px;white-space:pre-wrap;word-wrap:break-word}
+.side{width:340px;flex:none;border-left:1px solid var(--line);overflow:auto;background:var(--cream)}
+.sp-head{background:linear-gradient(135deg,#1d4a3b 0%,#2a6550 100%);color:#fff;padding:16px 16px 14px;border-bottom:3px solid #c9a24a}
+.sp-inbox{display:flex;align-items:center;gap:6px;font-size:12px;letter-spacing:.03em;opacity:.85}
+.sp-inbox svg{width:15px;height:15px}
+.sp-subj{font-size:15px;font-weight:600;line-height:1.35;margin-top:6px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.sp-badges{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.sp-st{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-radius:10px;padding:2px 9px;background:#ffffff26;color:#fff}
+.sp-st.open{background:#e8f0fe;color:#174ea6}.sp-st.pending{background:#fdf0dc;color:#9a5300}.sp-st.closed{background:#e6e9e7;color:#4a5450}.sp-st.via{background:#c9a24a;color:#1d2a20}
+.sp-card{background:var(--card);margin:12px;border-radius:14px;box-shadow:0 1px 2px var(--shadow),0 0 0 1px var(--line);padding:6px 14px 12px}
+.sp-row{display:grid;grid-template-columns:72px 1fr;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.sp-row:last-child{border-bottom:0}.sp-row.top{align-items:start}.sp-row.top .sp-k{padding-top:8px}
+.sp-k{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.sp-v{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.sp-av{width:30px;height:30px;border-radius:50%;background:var(--g);color:var(--onG);display:grid;place-items:center;font-size:11px;font-weight:700;border:2px solid var(--gold);flex:none}
+.sp-av.none{background:var(--chip);color:var(--mut);border-style:dashed}
+.sp-sel{width:auto;max-width:150px;border:1px solid transparent;background:transparent;padding:4px 6px;font-weight:600;cursor:pointer}
+.sp-sel:hover{border-color:var(--line);background:var(--soft)}
+.sp-gold,.sp-link{font-size:12px;font-weight:600;color:var(--gold);padding:2px 0}.sp-gold:hover,.sp-link:hover{text-decoration:underline}
+.sp-link{color:var(--mut)}
+.sp-seg{display:flex;background:var(--soft);border-radius:10px;padding:3px;gap:3px}
+.sp-seg button{flex:1;padding:6px 0;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--mut)}
+.sp-seg button:hover{background:var(--hover)}
+.sp-seg button.on.open{background:var(--infol);color:var(--info)}.sp-seg button.on.pending{background:var(--warn);color:var(--pending)}.sp-seg button.on.closed{background:var(--chip);color:var(--ink)}
+.dt-date,.dt-time{width:auto;padding:5px 8px;font-size:12.5px;border-radius:8px;background:var(--soft)}
+.dt-time{max-width:110px}
+.sp-due{margin-top:8px;font-size:12px;font-weight:600;border-radius:8px;padding:6px 10px}
+.sp-due.over{background:var(--dangerl);color:var(--danger)}.sp-due.soon{background:var(--warn);color:var(--pending)}.sp-due.due{background:var(--infol);color:var(--info)}
+.sp-hint{font-size:11.5px;color:var(--mut);font-weight:400}
+.sp-title{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:700;color:var(--g);padding:8px 0 10px;border-bottom:2px solid var(--goldl);margin-bottom:10px}
+.sp-note{min-height:64px;font-size:13px;resize:vertical;background:var(--soft);border-radius:10px}
+.sp-actions{display:flex;justify-content:flex-end;margin-top:6px}
+.sp-add{background:var(--gold);color:#fff;font-weight:600;font-size:12.5px;border-radius:16px;padding:6px 16px}.sp-add:hover{filter:brightness(1.08)}
+.tl{position:relative;margin-top:12px;padding-left:20px}
+.tl:before{content:'';position:absolute;left:6px;top:6px;bottom:6px;width:2px;background:var(--line);border-radius:2px}
+.tli{position:relative;padding:5px 0 7px;font-size:12.5px;color:var(--mut)}
+.tli:before{content:'';position:absolute;left:-19px;top:10px;width:10px;height:10px;border-radius:50%;background:var(--card);border:2px solid var(--line)}
+.tli.note:before{background:var(--gold);border-color:var(--gold)}
+.tli .meta{font-size:11px;color:var(--mut)}.tli .meta b{color:var(--ink);font-weight:600}
+.tli .nb{margin-top:4px;background:var(--goldl);color:var(--ink);border-radius:4px 12px 12px 12px;padding:8px 11px;font-size:13px;white-space:pre-wrap;word-wrap:break-word}
+.note{background:var(--goldl);border:1px solid var(--gold);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px;white-space:pre-wrap;word-wrap:break-word}
 .note small{display:block;color:var(--mut);margin-bottom:2px;white-space:normal}
 .side textarea{min-height:64px;font-size:13px;resize:vertical}
 .side .btn{margin-top:6px;padding:6px 14px;font-size:13px}
@@ -398,7 +447,7 @@ document.addEventListener('click',e=>{
 },true);
 
 function closePane(){leaveThread();S.compose=null;S.panel=null;S.open=false;placeMain();renderNav()}
-function openView(v,assignee=null,tag=null){leaveThread();S.compose=null;S.panel=null;S.view=v;S.viewAssignee=assignee;S.viewTag=tag;S.open=true;S.q='';S.threads=[];placeMain();renderNav();renderMain();loadThreads()}
+function openView(v,assignee=null,tag=null,day=null){leaveThread();S.compose=null;S.panel=null;S.view=v;S.viewAssignee=assignee;S.viewTag=tag;S.viewDay=day;S.open=true;S.q='';S.threads=[];placeMain();renderNav();renderMain();loadThreads()}
 function openCompose(){leaveThread();S.panel=null;S.compose={from:'shared',to:'',cc:'',bcc:'',subject:'',html:'',error:'',sending:false};S.open=true;placeMain();renderNav();renderMain()}
 function openPanel(p){leaveThread();S.compose=null;S.panel=p;S.open=true;placeMain();renderNav();renderMain();loadPanel()}
 
@@ -418,7 +467,7 @@ function renderMain(){
 
 function renderList(){
   const who=S.members.find(m=>m.id===S.viewAssignee),tag=S.tags.find(g=>g.id===S.viewTag);
-  const label=S.view==='assignee'?'Assigned to '+(who?.display_name||who?.email||'teammate'):S.view==='tag'?'Tag: '+(tag?.name||''):S.view==='search'?'Search: '+S.q:VIEWS.find(v=>v[0]===S.view)[1];
+  const label=S.view==='assignee'?'Assigned to '+(who?.display_name||who?.email||'teammate'):S.view==='tag'?'Tag: '+(tag?.name||''):S.view==='search'?'Search: '+S.q:S.view==='day'?'Received '+new Date(S.viewDay+'T12:00').toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}):VIEWS.find(v=>v[0]===S.view)[1];
   // Search runs Gmail's own search over the whole shared mailbox (all dates, full text, attachments' names).
   const search=h('input',{class:'search',type:'search',placeholder:'Search all mail (e.g. coverage from:carrier.com)',value:S.q,'aria-label':'Search all mail',
     onkeydown:e=>{if(e.key==='Enter')runSearch(e.target.value)}});
@@ -608,6 +657,20 @@ function signatureBlock(){
   return box;
 }
 
+// ---------- date + time (15-minute steps, 9:00 AM by default) ----------
+const pad2=n=>String(n).padStart(2,'0');
+const ymd=d=>`${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+const hm15=d=>{const m=Math.round((d.getHours()*60+d.getMinutes())/15)*15%1440;return `${pad2(Math.floor(m/60))}:${pad2(m%60)}`};
+const TIMES=[...Array(96)].map((_,i)=>{const hh=Math.floor(i/4),mm=(i%4)*15;return [`${pad2(hh)}:${pad2(mm)}`,new Date(2000,0,1,hh,mm).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})]});
+function dateTime(value,{onChange,label='Date',defaultTime='09:00'}={}){
+  const date=h('input',{type:'date',class:'dt-date','aria-label':label+' date',value:value?ymd(value):''});
+  const time=h('select',{class:'dt-time','aria-label':label+' time'},TIMES.map(([v,l])=>h('option',{value:v,selected:v===(value?hm15(value):defaultTime)},l)));
+  const get=()=>{if(!date.value)return null;const [Y,M,D]=date.value.split('-').map(Number),[hh,mm]=time.value.split(':').map(Number);return new Date(Y,M-1,D,hh,mm)};
+  date.addEventListener('change',()=>{if(!value&&date.value)time.value=defaultTime;onChange?.(get())});
+  time.addEventListener('change',()=>{if(!date.value)date.value=ymd(new Date());onChange?.(get())});
+  return {els:[date,time],get};
+}
+
 // ---------- schedule send picker ----------
 const at=(d,h,m=0)=>{const x=new Date(d);x.setHours(h,m,0,0);return x};
 function schedulePresets(){
@@ -623,10 +686,10 @@ const localInput=d=>{const z=n=>String(n).padStart(2,'0');return `${d.getFullYea
 const fmtWhen=iso=>new Date(iso).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 function schedulePicker(onPick,disabled){
   const menu=h('div',{class:'menu up',role:'menu',hidden:true});
-  const custom=h('input',{type:'datetime-local','aria-label':'Custom send time',value:localInput(at(new Date(Date.now()+864e5),8))});
+  const custom=dateTime(at(new Date(Date.now()+864e5),9),{label:'Send'});
   menu.append(h('div',{class:'mie'},'Schedule send'),
     ...schedulePresets().map(([a,b,d])=>h('button',{class:'mit sched',role:'menuitem',onclick:()=>{menu.hidden=true;onPick(d)}},h('span',{},a),h('span',{class:'hint'},d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+', '+b))),
-    h('div',{class:'custom'},custom,h('button',{class:'btn small',onclick:()=>{const d=new Date(custom.value);if(isNaN(d)||d<Date.now()+60000)return alert('Pick a time at least a minute from now.');menu.hidden=true;onPick(d)}},'Schedule')));
+    h('div',{class:'custom'},...custom.els,h('button',{class:'btn small',onclick:()=>{const d=custom.get();if(!d||d<Date.now()+60000)return alert('Pick a time at least a minute from now.');menu.hidden=true;onPick(d)}},'Schedule')));
   return h('div',{class:'tplwrap schedwrap'},h('button',{class:'btn ghost',disabled,title:'Schedule send','aria-haspopup':'menu',onclick:()=>{menu.hidden=!menu.hidden}},'⏰ Schedule'),menu);
 }
 
@@ -790,41 +853,54 @@ function renderReply(){
 
 function renderSide(){
   const d=S.detail,t=d.thread;
-  const side=h('div',{class:'side'});
   const patch=async body=>{try{await api('/api/threads/'+t.id,'PATCH',body);await loadDetail();loadCounts()}catch(e){alert(e.message)}};
-  side.append(h('div',{class:'props'},
-    h('span',{class:'k'},'Inbox'),h('span',{class:'v',title:t.inbox_email},svg(ICON.inbox),t.inbox_name),
-    h('span',{class:'k'},'Assignee'),h('span',{class:'v'},
-      h('select',{class:'plain','aria-label':'Assignee',onchange:e=>patch({assigneeId:e.target.value||null})},
-        h('option',{value:''},'None'),S.members.map(m=>h('option',{value:m.id,selected:m.id===t.assignee_id},(m.display_name||m.email)+(m.id===S.me?.id?' (me)':''))))),
-    h('span',{class:'k'},'Status'),h('span',{class:'v'},
-      h('select',{class:'plain st '+t.status,'aria-label':'Status',onchange:e=>patch({status:e.target.value})},
-        Object.entries(STATUS).map(([k,v])=>h('option',{value:k,selected:t.status===k},v))))));
-  if(t.assignee_id!==S.me?.id)side.append(h('button',{class:'link',style:'margin:2px 0 0 96px',onclick:()=>patch({assigneeId:S.me.id})},'Assign to me'));
+  const assignee=S.members.find(m=>m.id===t.assignee_id);
+  const side=h('div',{class:'side'});
+  // Header: inbox, subject, status
+  side.append(h('div',{class:'sp-head'},
+    h('div',{class:'sp-inbox',title:t.inbox_email},svg(ICON.inbox),t.inbox_name),
+    h('div',{class:'sp-subj'},t.subject),
+    h('div',{class:'sp-badges'},h('span',{class:'sp-st '+t.status},STATUS[t.status]),
+      t.source_mailbox?h('span',{class:'sp-st via'},'📥 via '+(S.members.find(m=>m.email.toLowerCase()===t.source_mailbox.toLowerCase())?.display_name||t.source_mailbox.split('@')[0])):null)));
+  // Properties card
+  const card=h('div',{class:'sp-card'});
+  card.append(h('div',{class:'sp-row'},h('span',{class:'sp-k'},'Assignee'),h('div',{class:'sp-v'},
+    h('span',{class:'sp-av'+(assignee?'':' none')},assignee?initials(assignee.display_name||assignee.email):'?'),
+    h('select',{class:'sp-sel','aria-label':'Assignee',onchange:e=>patch({assigneeId:e.target.value||null})},
+      h('option',{value:''},'Unassigned'),S.members.map(m=>h('option',{value:m.id,selected:m.id===t.assignee_id},(m.display_name||m.email)+(m.id===S.me?.id?' (me)':'')))),
+    t.assignee_id!==S.me?.id?h('button',{class:'sp-gold',onclick:()=>patch({assigneeId:S.me.id})},'Assign to me'):null)));
+  card.append(h('div',{class:'sp-row'},h('span',{class:'sp-k'},'Status'),h('div',{class:'sp-seg',role:'group','aria-label':'Status'},
+    Object.entries(STATUS).map(([k,v])=>h('button',{class:k+(t.status===k?' on':''),'aria-pressed':String(t.status===k),onclick:()=>t.status!==k&&patch({status:k})},v)))));
   const due=slaState({...t,sla_hours:t.sla_hours});
-  side.append(h('div',{class:'tagrow'},h('span',{class:'k'},'Due'),h('div',{class:'tagbox'},
-    h('input',{type:'datetime-local',class:'duein','aria-label':'Due date',value:t.due_at?localInput(new Date(t.due_at)):'',
-      onchange:e=>{const v=e.target.value;if(!v)return patch({dueAt:null});const d2=new Date(v);if(!isNaN(d2))patch({dueAt:d2.toISOString()})}}),
-    t.due_at?h('button',{class:'link',onclick:()=>patch({dueAt:null})},'Clear'):h('span',{class:'hint'},`Default: reply within ${t.sla_hours||4}h`))));
-  if(due)side.append(h('div',{class:'slaline '+due.cls},t.due_at?(due.cls==='over'?due.label+' · was '+due.title.toLowerCase():due.title):due.label+' · '+due.title));
-  const tagAct=async(fn)=>{try{await fn();await Promise.all([loadDetail(),loadTags()])}catch(e){alert(e.message)}};
+  const dt=dateTime(t.due_at?new Date(t.due_at):null,{label:'Due',onChange:v=>v&&patch({dueAt:v.toISOString()})});
+  card.append(h('div',{class:'sp-row top'},h('span',{class:'sp-k'},'Due'),h('div',{},
+    h('div',{class:'sp-v'},...dt.els,t.due_at?h('button',{class:'sp-link',onclick:()=>patch({dueAt:null})},'Clear'):null),
+    due?h('div',{class:'sp-due '+due.cls},t.due_at?(due.cls==='over'?'⏰ '+due.label+' · '+due.title:'⏱ '+due.title):'⏱ '+due.label+' · reply target '+(t.sla_hours||4)+'h')
+      :h('div',{class:'sp-hint'},t.due_at?'':`No due date · reply target ${t.sla_hours||4}h`))));
+  const tagAct=async fn=>{try{await fn();await Promise.all([loadDetail(),loadTags()])}catch(e){alert(e.message)}};
   const have=new Set((d.tags||[]).map(g=>g.id));
-  side.append(h('div',{class:'tagrow'},h('span',{class:'k'},'Tags'),h('div',{class:'tagbox'},
-    (d.tags||[]).map(g=>h('span',{class:'tagc big',style:`background:${g.color}1f;color:${g.color};border-color:${g.color}55`},g.name,
+  card.append(h('div',{class:'sp-row top'},h('span',{class:'sp-k'},'Tags'),h('div',{class:'tagbox'},
+    (d.tags||[]).map(g=>h('span',{class:'tagc big',style:`background:${g.color}22;color:${g.color};border-color:${g.color}66`},g.name,
       h('button',{class:'tagx',title:'Remove tag '+g.name,'aria-label':'Remove tag '+g.name,onclick:()=>tagAct(()=>api('/api/threads/'+t.id+'/tags/'+g.id,'DELETE'))},'×'))),
     h('select',{class:'addtag','aria-label':'Add tag',onchange:async e=>{const v=e.target.value;e.target.value='';
       if(v==='__new'){const name=prompt('New tag name:');if(!name)return;
-        return tagAct(async()=>{const g=await api('/api/inboxes/'+S.inbox.id+'/tags','POST',{name,color:'#'+['1a73e8','188038','b06000','a142f4','d93025','007b83'][Math.floor(Math.random()*6)]});await api('/api/threads/'+t.id+'/tags','POST',{tagId:g.id})})}
+        return tagAct(async()=>{const g=await api('/api/inboxes/'+S.inbox.id+'/tags','POST',{name,color:'#'+['1a73e8','188038','b5872c','a142f4','d93025','007b83'][Math.floor(Math.random()*6)]});await api('/api/threads/'+t.id+'/tags','POST',{tagId:g.id})})}
       if(v)tagAct(()=>api('/api/threads/'+t.id+'/tags','POST',{tagId:v}))}},
       h('option',{value:''},'+ Add tag'),S.tags.filter(g=>!have.has(g.id)).map(g=>h('option',{value:g.id},g.name)),h('option',{value:'__new'},'New tag…')))));
-  side.append(h('h3',{},'Activity & notes'));
-  const ta=h('textarea',{placeholder:'Add a note for your team…','aria-label':'New internal note'});
-  side.append(h('div',{class:'notebox'},ta,h('button',{class:'btn',onclick:async e=>{if(!ta.value.trim())return;e.target.disabled=true;
-    try{await api('/api/threads/'+t.id+'/notes','POST',{body:ta.value});await loadDetail()}catch(err){alert(err.message);e.target.disabled=false}}},'Add')));
+  side.append(card);
+  // Activity & notes card
+  const notes=h('div',{class:'sp-card'});
+  notes.append(h('div',{class:'sp-title'},'Activity & notes',h('span',{class:'sp-hint'},'Only your team sees these')));
+  const ta=h('textarea',{class:'sp-note','aria-label':'New internal note',placeholder:'Add a note… use @name to notify a teammate'});
+  notes.append(ta,h('div',{class:'sp-actions'},h('button',{class:'sp-add',onclick:async e=>{if(!ta.value.trim())return;e.target.disabled=true;
+    try{await api('/api/threads/'+t.id+'/notes','POST',{body:ta.value});await loadDetail()}catch(err){alert(err.message);e.target.disabled=false}}},'Add note')));
   const items=[...d.notes.map(n=>({at:n.created_at,note:n})),...d.activity.map(a=>({at:a.created_at,act:a}))].sort((x,y)=>new Date(y.at)-new Date(x.at));
-  if(!items.length)side.append(h('div',{class:'hint'},'Only your team sees notes. They are never emailed.'));
-  for(const it of items)side.append(it.note?h('div',{class:'note'},h('small',{},it.note.display_name+' · '+full(it.at)),it.note.body)
-    :h('div',{class:'act',title:full(it.at)},describe(it.act),' · ',when(it.at)));
+  const tl=h('div',{class:'tl'});
+  if(!items.length)tl.append(h('div',{class:'sp-hint'},'No activity yet.'));
+  for(const it of items)tl.append(it.note
+    ?h('div',{class:'tli note'},h('div',{class:'meta'},h('b',{},it.note.display_name),' · ',h('span',{title:full(it.at)},when(it.at))),h('div',{class:'nb'},it.note.body))
+    :h('div',{class:'tli',title:full(it.at)},h('span',{},describe(it.act)),h('span',{class:'meta'},' · '+when(it.at))));
+  notes.append(tl);side.append(notes);
   return side;
 }
 function describe(a){
@@ -835,6 +911,7 @@ function describe(a){
   if(a.action==='forward.sent')return `${who} forwarded to ${(m.to||[]).join(', ')}`;
   if(a.action==='compose.sent')return `${who} started this conversation`;
   if(a.action==='thread.reopened')return 'Reopened by a new client message';
+  if(a.action==='rule.applied')return `Rule “${m.rule}” applied`;
   if(a.action==='thread.due')return m.to?`${who} set the due date to ${fmtWhen(m.to)}`:`${who} cleared the due date`;
   if(a.action==='reply.scheduled')return `${who} scheduled a reply for ${fmtWhen(m.sendAt)}`;
   if(a.action==='reply.schedule_canceled')return `${who} canceled a scheduled reply`;
@@ -848,7 +925,7 @@ function describe(a){
   return `${who} updated the conversation`;
 }
 // ---------- panels: notifications, reports, settings ----------
-const KIND={scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,reply:n=>`New reply from ${n.detail||'the client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
+const KIND={due:n=>'Due now',scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,reply:n=>`New reply from ${n.detail||'the client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
 function renderPanel(){
   const title={notifications:'Notifications',reports:'Reports · last 30 days',settings:'Settings',scheduled:'Scheduled'}[S.panel];
   const bar=h('div',{class:'bar'},h('h2',{},title),h('span',{style:'margin-left:auto'}),
@@ -859,7 +936,7 @@ function renderPanel(){
     if(!S.notifs.items.length)body.append(h('div',{class:'empty'},h('strong',{},'No notifications'),"You'll be notified when someone assigns you a conversation, mentions you in a note, asks you to review a draft, or a client replies to one of yours."));
     for(const n of S.notifs.items)body.append(h('button',{class:'nrow'+(n.read_at?'':' unread'),onclick:async()=>{
         await api('/api/notifications/read','POST',{ids:[n.id]}).catch(()=>{});if(n.thread_id)openThread(n.thread_id);loadNotifs()}},
-      h('span',{class:'nk '+n.kind},{assigned:'👤',mention:'@',reply:'↩',draft:'✎',scheduled_failed:'⚠'}[n.kind]||'•'),
+      h('span',{class:'nk '+n.kind},{assigned:'👤',mention:'@',reply:'↩',draft:'✎',scheduled_failed:'⚠',due:'⏰'}[n.kind]||'•'),
       h('div',{class:'nt'},h('b',{},KIND[n.kind]?.(n)||n.kind),h('div',{},n.subject||''),n.kind==='mention'&&n.detail?h('div',{class:'nq'},'“'+n.detail+'”'):null),
       h('span',{class:'time',title:full(n.created_at)},when(n.created_at))));
   }
@@ -886,62 +963,137 @@ function renderPanel(){
       const total=r.daily.reduce((n,d)=>n+d.received,0),maxd=Math.max(1,...r.daily.map(d=>d.received));
       body.append(h('div',{class:'cards'},
         [['Open now',r.now.open],['Pending',r.now.pending],['Unassigned',r.now.unassigned],['Overdue',r.now.overdue,r.now.overdue?'bad':''],
-         ['Received (30 days)',total],['Median first reply',fmtMin(fr.median_minutes),'',fr.n?`${fr.n} conversations answered in Fredver`:'No replies sent from Fredver yet']]
+         ['Received (30 days)',total],['Avg first response',fmtMin(fr.avg_minutes),'',fr.n?`Average across ${fr.n} conversations answered in Fredver`:'No replies sent from Fredver yet'],
+         ['Median first response',fmtMin(fr.median_minutes),'',fr.n?`Half of ${fr.n} conversations were answered faster than this`:'No replies sent from Fredver yet']]
         .map(([k,v,c,t])=>h('div',{class:'card '+(c||''),title:t||''},h('div',{class:'cv'},String(v??0)),h('div',{class:'ck'},k)))),
-        h('h3',{class:'rh'},'Conversations received per day'),
-        h('div',{class:'bars',role:'img','aria-label':'Conversations received per day, last 30 days'},r.daily.map(d=>h('div',{class:'barw',title:`${d.day}: ${d.received}`},
-          h('div',{class:'bar1',style:`height:${Math.round(d.received/maxd*100)}%`}),h('span',{},d.day.slice(8))))),
+        h('h3',{class:'rh'},'Conversations received per day ',h('span',{class:'hint'},'· click a day to see its conversations')),
+        h('div',{class:'bars',role:'group','aria-label':'Conversations received per day, last 30 days'},r.daily.map(d=>h('button',{class:'barw',
+          title:`${new Date(d.day+'T12:00').toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})}: ${d.received} received`,
+          'aria-label':`${d.day}: ${d.received} received`,onclick:()=>openView('day',null,null,d.day)},
+          h('span',{class:'bv'},d.received||''),h('div',{class:'bar1',style:`height:${Math.round(d.received/maxd*85)}%`}),h('span',{},d.day.slice(8))))),
         h('h3',{class:'rh'},'By teammate'),
         h('table',{class:'tbl'},h('thead',{},h('tr',{},['Teammate','Emails sent','Closed','Open now','Pending now'].map(x=>h('th',{},x)))),
           h('tbody',{},r.people.map(p=>h('tr',{},h('td',{},p.name),h('td',{},p.sent),h('td',{},p.closed),h('td',{},p.open_now),h('td',{},p.pending_now))))),
-        h('p',{class:'hint'},'Counts emails sent and conversations closed in Fredver. First-reply time measures from the client\'s first email to the first reply sent from Fredver.'));
+        h('p',{class:'hint'},'Counts emails sent and conversations closed in Fredver. Response time is measured from the client\'s first email to the first reply sent from Fredver.'));
     }
   }
-  if(S.panel==='settings'){
-    if(S.me?.role!=='admin')body.append(h('div',{class:'empty'},'Only admins can change settings.'));
-    else if(!S.team)body.append(h('div',{class:'loading'},'Loading…'));
-    else{
-      const upd=async(id,data)=>{try{await api('/api/users/'+id,'PATCH',data);await loadPanel();await loadInbox()}catch(e){alert(e.message)}};
-      const nf={email:'',name:'',role:'agent'};
-      body.append(h('h3',{class:'rh'},'Team'),
-        h('table',{class:'tbl'},h('thead',{},h('tr',{},['Name','Email','Role','Access'].map(x=>h('th',{},x)))),
-          h('tbody',{},S.team.filter(u=>u.member||u.active).map(u=>h('tr',{class:u.active?'':'off'},
-            h('td',{},h('input',{class:'cell',value:u.display_name,'aria-label':'Name for '+u.email,onchange:e=>upd(u.id,{displayName:e.target.value})})),
-            h('td',{},u.email),
-            h('td',{},h('select',{class:'cell','aria-label':'Role for '+u.email,onchange:e=>upd(u.id,{role:e.target.value})},
-              h('option',{value:'agent',selected:u.role==='agent'},'Agent'),h('option',{value:'admin',selected:u.role==='admin'},'Admin'))),
-            h('td',{},h('label',{class:'tog'},h('input',{type:'checkbox',checked:u.active,onchange:e=>{
-              if(!e.target.checked&&!confirm(`Remove ${u.display_name}'s access? Their open conversations become unassigned.`)){e.target.checked=true;return}
-              upd(u.id,{active:e.target.checked})}}),u.active?'Active':'Removed')))))),
-        h('div',{class:'addrow'},
-          h('input',{placeholder:'name@columbiabasininsurance.com','aria-label':'New teammate email',oninput:e=>{nf.email=e.target.value}}),
-          h('input',{placeholder:'Display name','aria-label':'New teammate name',oninput:e=>{nf.name=e.target.value}}),
-          h('select',{'aria-label':'New teammate role',onchange:e=>{nf.role=e.target.value}},h('option',{value:'agent'},'Agent'),h('option',{value:'admin'},'Admin')),
-          h('button',{class:'btn',onclick:async()=>{try{await api('/api/inboxes/'+S.inbox.id+'/team','POST',{email:nf.email,displayName:nf.name||nf.email.split('@')[0],role:nf.role});await loadPanel();await loadInbox()}
-            catch(e){alert(e.message.includes('Invalid')?'Use a @columbiabasininsurance.com address.':e.message)}}},'Add teammate')),
-        h('p',{class:'hint'},'New teammates install Fredver (or get it automatically from Admin Console) and sign in with their own work account.'),
-        h('h3',{class:'rh'},'Reply time target (SLA)'),
-        h('div',{class:'addrow'},h('label',{},'Reply to clients within ',h('input',{type:'number',min:'1',max:'168',value:String(S.settings?.sla_hours||4),style:'width:80px','aria-label':'SLA hours',
-          onchange:async e=>{try{await api('/api/inboxes/'+S.inbox.id+'/settings','PATCH',{slaHours:Number(e.target.value)});S.settings={sla_hours:Number(e.target.value)};loadCounts()}catch(err){alert(err.message)}}}),' hours'),
-          h('span',{class:'hint'},'Open conversations waiting longer than this show as Overdue.')),
-        h('h3',{class:'rh'},'Tags'),
-        h('div',{class:'tagbox'},S.tags.map(g=>h('span',{class:'tagc big',style:`background:${g.color}1f;color:${g.color};border-color:${g.color}55`},g.name,
-          h('button',{class:'tagx',title:'Delete tag '+g.name,'aria-label':'Delete tag '+g.name,onclick:async()=>{if(!confirm(`Delete the tag "${g.name}" everywhere?`))return;
-            try{await api('/api/tags/'+g.id,'DELETE');await loadTags();renderMain()}catch(e){alert(e.message)}}},'×')))),
-        h('h3',{class:'rh'},'Templates'),
-        S.templates.length?h('ul',{class:'tpls'},S.templates.map(t=>h('li',{},h('b',{},t.name),' · ',h('span',{class:'hint'},plainOf(t.body_html).slice(0,90)),
-          h('button',{class:'tagx',title:'Delete template','aria-label':'Delete template '+t.name,onclick:async()=>{if(!confirm(`Delete the template "${t.name}"?`))return;
-            try{await api('/api/templates/'+t.id,'DELETE');await loadTemplates();renderMain()}catch(e){alert(e.message)}}},'×')))):h('p',{class:'hint'},'Create templates from the Templates menu while writing a reply.'));
-    }
-  }
+  if(S.panel==='settings')body.append(...renderSettings());
   return [bar,body];
 }
+// ---------- Settings ----------
+const sec=(title,sub,...kids)=>h('section',{class:'set'},h('h3',{class:'rh'},title,sub?h('span',{class:'hint'},' · '+sub):null),...kids);
+function renderSettings(){
+  const isAdmin=S.me?.role==='admin',out=[];
+  // Appearance
+  out.push(sec('Appearance','this browser',h('div',{class:'seg3',role:'radiogroup','aria-label':'Theme'},
+    [['system','Match Gmail'],['light','Light'],['dark','Dark']].map(([v,l])=>h('button',{role:'radio','aria-checked':String(themePref===v),class:themePref===v?'on':'',
+      onclick:()=>{themePref=v;store.set('theme',v);applyTheme();renderMain()}},l)))));
+  // Desktop notifications
+  out.push(sec('Desktop notifications','this browser',
+    h('label',{class:'tog'},h('input',{type:'checkbox',checked:!S.notifyOff,onchange:async e=>{S.notifyOff=!e.target.checked;await chrome.storage.local.set({notifyOff:S.notifyOff});renderMain()}}),
+      'Show desktop notifications for assignments, @mentions, client replies, review requests, due dates and failed scheduled emails'),
+    h('div',{class:'addrow'},h('button',{class:'btn ghost small',onclick:async()=>{try{await call('testNotify')}catch(e){alert(e.message)}}},'Send a test notification'),
+      h('span',{class:'hint'},"Nothing appears? Allow notifications for Google Chrome in your computer's settings (Mac: System Settings → Notifications; Windows: Settings → System → Notifications)."))));
+  // Templates
+  const te=S.tplEdit;
+  const tplBox=h('div',{});
+  if(te){
+    const [tb,ed]=editor(te,{placeholder:'Template text. Placeholders: {{client_first_name}}, {{client_name}}, {{my_first_name}}, {{my_name}}'});
+    tplBox.append(h('div',{class:'tpl-edit'},h('input',{value:te.name,placeholder:'Template name, e.g. "COI request reply"','aria-label':'Template name',oninput:e=>{te.name=e.target.value}}),
+      h('div',{class:'ed-wrap'},tb,ed),
+      h('div',{class:'addrow'},h('button',{class:'btn',onclick:async()=>{if(!te.name.trim()||!plainOf(te.html))return alert('Add a name and some text.');
+        try{te.id?await api('/api/templates/'+te.id,'PATCH',{name:te.name,bodyHtml:te.html}):await api('/api/inboxes/'+S.inbox.id+'/templates','POST',{name:te.name,bodyHtml:te.html});
+          S.tplEdit=null;await loadTemplates();renderMain()}catch(e){alert(e.message)}}},te.id?'Save template':'Create template'),
+        h('button',{class:'btn ghost',onclick:()=>{S.tplEdit=null;renderMain()}},'Cancel'))));
+  }
+  out.push(sec('Templates','shared with the team',
+    h('ul',{class:'tpls'},S.templates.map(t=>h('li',{},h('b',{},t.name),h('span',{class:'hint'},' · '+plainOf(t.body_html).slice(0,80)),
+      h('button',{class:'sp-link',onclick:()=>{S.tplEdit={id:t.id,name:t.name,html:t.body_html};renderMain()}},'Edit'),
+      h('button',{class:'tagx',title:'Delete template','aria-label':'Delete template '+t.name,onclick:async()=>{if(!confirm(`Delete the template "${t.name}"?`))return;
+        try{await api('/api/templates/'+t.id,'DELETE');await loadTemplates();renderMain()}catch(e){alert(e.message)}}},'×')))),
+    te?tplBox:h('button',{class:'btn ghost small',onclick:()=>{S.tplEdit={id:null,name:'',html:''};renderMain()}},'+ New template')));
+  // Tags
+  out.push(sec('Tags','rename or recolor; used in the sidebar and on conversations',
+    h('div',{class:'tagedit'},S.tags.map(g=>h('div',{class:'tagline'},
+      h('input',{type:'color',value:g.color,'aria-label':'Color for '+g.name,onchange:async e=>{try{await api('/api/tags/'+g.id,'PATCH',{color:e.target.value});await loadTags();renderMain()}catch(err){alert(err.message)}}}),
+      h('input',{class:'cell',value:g.name,'aria-label':'Tag name',onchange:async e=>{try{await api('/api/tags/'+g.id,'PATCH',{name:e.target.value});await loadTags();renderMain()}catch(err){alert(err.message);renderMain()}}}),
+      h('span',{class:'hint'},(g.open_count||0)+' open'),
+      isAdmin?h('button',{class:'tagx',title:'Delete tag','aria-label':'Delete tag '+g.name,onclick:async()=>{if(!confirm(`Delete the tag "${g.name}" everywhere?`))return;
+        try{await api('/api/tags/'+g.id,'DELETE');await loadTags();renderMain()}catch(e){alert(e.message)}}},'×'):null))),
+    h('button',{class:'btn ghost small',onclick:async()=>{const name=prompt('New tag name:');if(!name)return;
+      try{await api('/api/inboxes/'+S.inbox.id+'/tags','POST',{name,color:'#1a73e8'});await loadTags();renderMain()}catch(e){alert(e.message)}}},'+ New tag')));
+  // Auto-assign rules
+  const rulesUI=[];
+  const statusLabel={open:'Open',pending:'Pending'};
+  for(const r of S.rules||[])rulesUI.push(h('div',{class:'rule'+(r.enabled?'':' off')},
+    h('div',{class:'rule-t'},h('b',{},r.name),h('span',{class:'hint'},` · used ${r.times_used} time${r.times_used===1?'':'s'}`)),
+    h('div',{class:'rule-d'},'When ',[r.match_subject?h('span',{class:'chipq'},'subject has “'+r.match_subject+'”'):null,r.match_subject&&r.match_from?' or ':null,
+      r.match_from?h('span',{class:'chipq'},'sender has “'+r.match_from+'”'):null],' → ',
+      [r.assignee_name?'assign to '+r.assignee_name:null,r.action_status?'set '+statusLabel[r.action_status]:null,r.tag_name?'tag “'+r.tag_name+'”':null].filter(Boolean).join(', ')),
+    isAdmin?h('div',{class:'rule-a'},h('label',{class:'tog'},h('input',{type:'checkbox',checked:r.enabled,onchange:async e=>{
+        try{await api('/api/rules/'+r.id,'PUT',{name:r.name,matchSubject:r.match_subject,matchFrom:r.match_from,assigneeId:r.assignee_id,status:r.action_status,tagId:r.tag_id,enabled:e.target.checked});await loadRules();renderMain()}catch(err){alert(err.message)}}}),'On'),
+      h('button',{class:'sp-link',onclick:()=>{S.ruleEdit={id:r.id,name:r.name,matchSubject:r.match_subject,matchFrom:r.match_from,assigneeId:r.assignee_id,status:r.action_status,tagId:r.tag_id,enabled:r.enabled};renderMain()}},'Edit'),
+      h('button',{class:'tagx',title:'Delete rule','aria-label':'Delete rule '+r.name,onclick:async()=>{if(!confirm(`Delete the rule "${r.name}"?`))return;
+        try{await api('/api/rules/'+r.id,'DELETE');await loadRules();renderMain()}catch(e){alert(e.message)}}},'×')):null));
+  const re=S.ruleEdit;
+  if(isAdmin&&re){
+    const f=(k,ph,label)=>h('input',{value:re[k]||'',placeholder:ph,'aria-label':label,oninput:e=>{re[k]=e.target.value}});
+    rulesUI.push(h('div',{class:'rule-form'},
+      h('label',{},'Rule name',f('name','e.g. COI requests to Henry','Rule name')),
+      h('div',{class:'two'},h('label',{},'When the subject contains',f('matchSubject','e.g. certificate','Subject contains')),
+        h('label',{},'…or the sender contains',f('matchFrom','e.g. @progressive.com','Sender contains'))),
+      h('div',{class:'three'},
+        h('label',{},'Assign to',h('select',{'aria-label':'Assign to',onchange:e=>{re.assigneeId=e.target.value||null}},h('option',{value:''},'— nobody —'),
+          S.members.map(m=>h('option',{value:m.id,selected:m.id===re.assigneeId},m.display_name||m.email)))),
+        h('label',{},'Set status',h('select',{'aria-label':'Set status',onchange:e=>{re.status=e.target.value||null}},h('option',{value:''},'— keep Open —'),
+          h('option',{value:'pending',selected:re.status==='pending'},'Pending'))),
+        h('label',{},'Add tag',h('select',{'aria-label':'Add tag',onchange:e=>{re.tagId=e.target.value||null}},h('option',{value:''},'— none —'),
+          S.tags.map(g=>h('option',{value:g.id,selected:g.id===re.tagId},g.name))))),
+      h('div',{class:'addrow'},h('button',{class:'btn',onclick:async()=>{
+          const body={name:re.name,matchSubject:re.matchSubject||'',matchFrom:re.matchFrom||'',assigneeId:re.assigneeId||null,status:re.status||null,tagId:re.tagId||null,enabled:re.enabled!==false};
+          try{re.id?await api('/api/rules/'+re.id,'PUT',body):await api('/api/inboxes/'+S.inbox.id+'/rules','POST',body);S.ruleEdit=null;await loadRules();renderMain()}catch(e){alert(e.message)}}},re.id?'Save rule':'Create rule'),
+        h('button',{class:'btn ghost',onclick:()=>{S.ruleEdit=null;renderMain()}},'Cancel'),
+        h('span',{class:'hint'},'Rules run on new conversations as they arrive. The first matching rule wins.'))));
+  }
+  out.push(sec('Auto-assign rules',isAdmin?'admins':'set by admins',...(rulesUI.length?rulesUI:[h('p',{class:'hint'},'No rules yet.')]),
+    isAdmin&&!re?h('button',{class:'btn ghost small',onclick:()=>{S.ruleEdit={name:'',matchSubject:'',matchFrom:'',assigneeId:null,status:null,tagId:null,enabled:true};renderMain()}},'+ New rule'):null));
+  if(isAdmin&&S.team){
+    const upd=async(id,data)=>{try{await api('/api/users/'+id,'PATCH',data);await loadPanel();await loadInbox()}catch(e){alert(e.message)}};
+    const nf={email:'',name:'',role:'agent'};
+    out.push(sec('Team','admins',
+      h('table',{class:'tbl'},h('thead',{},h('tr',{},['Name','Email','Role','Access'].map(x=>h('th',{},x)))),
+        h('tbody',{},S.team.filter(u=>u.member||u.active).map(u=>h('tr',{class:u.active?'':'off'},
+          h('td',{},h('input',{class:'cell',value:u.display_name,'aria-label':'Name for '+u.email,onchange:e=>upd(u.id,{displayName:e.target.value})})),
+          h('td',{},u.email),
+          h('td',{},h('select',{class:'cell','aria-label':'Role for '+u.email,onchange:e=>upd(u.id,{role:e.target.value})},
+            h('option',{value:'agent',selected:u.role==='agent'},'Agent'),h('option',{value:'admin',selected:u.role==='admin'},'Admin'))),
+          h('td',{},h('label',{class:'tog'},h('input',{type:'checkbox',checked:u.active,onchange:e=>{
+            if(!e.target.checked&&!confirm(`Remove ${u.display_name}'s access? Their open conversations become unassigned.`)){e.target.checked=true;return}
+            upd(u.id,{active:e.target.checked})}}),u.active?'Active':'Removed')))))),
+      h('div',{class:'addrow'},
+        h('input',{placeholder:'name@columbiabasininsurance.com','aria-label':'New teammate email',oninput:e=>{nf.email=e.target.value}}),
+        h('input',{placeholder:'Display name','aria-label':'New teammate name',oninput:e=>{nf.name=e.target.value}}),
+        h('select',{'aria-label':'New teammate role',onchange:e=>{nf.role=e.target.value}},h('option',{value:'agent'},'Agent'),h('option',{value:'admin'},'Admin')),
+        h('button',{class:'btn',onclick:async()=>{try{await api('/api/inboxes/'+S.inbox.id+'/team','POST',{email:nf.email,displayName:nf.name||nf.email.split('@')[0],role:nf.role});await loadPanel();await loadInbox()}
+          catch(e){alert(e.message)}}},'Add teammate'))));
+    out.push(sec('Reply time target','admins',h('div',{class:'addrow'},h('label',{},'Reply to clients within ',h('input',{type:'number',min:'1',max:'168',value:String(S.settings?.sla_hours||4),style:'width:80px','aria-label':'Reply target hours',
+        onchange:async e=>{try{await api('/api/inboxes/'+S.inbox.id+'/settings','PATCH',{slaHours:Number(e.target.value)});S.settings={sla_hours:Number(e.target.value)};loadCounts()}catch(err){alert(err.message)}}}),' hours'),
+      h('span',{class:'hint'},'Used when a conversation has no due date of its own.'))));
+  }
+  return out;
+}
+async function loadRules(){try{S.rules=await api('/api/inboxes/'+S.inbox.id+'/rules')}catch{S.rules=[]}}
+
 async function loadPanel(){
   try{
     if(S.panel==='notifications')await loadNotifs();
     if(S.panel==='scheduled'){S.scheduledList=null;renderMain();S.scheduledList=await api('/api/inboxes/'+S.inbox.id+'/scheduled')}
     if(S.panel==='reports'){S.report=null;renderMain();S.report=await api('/api/inboxes/'+S.inbox.id+'/reports')}
-    if(S.panel==='settings'&&S.me?.role==='admin'){[S.team,S.settings]=await Promise.all([api('/api/inboxes/'+S.inbox.id+'/team'),api('/api/inboxes/'+S.inbox.id+'/settings')]);await Promise.all([loadTags(),loadTemplates()])}
+    if(S.panel==='settings'){
+      S.notifyOff=!!(await chrome.storage.local.get('notifyOff').catch(()=>({}))).notifyOff;
+      await Promise.all([loadTags(),loadTemplates(),loadRules()]);
+      if(S.me?.role==='admin')[S.team,S.settings]=await Promise.all([api('/api/inboxes/'+S.inbox.id+'/team'),api('/api/inboxes/'+S.inbox.id+'/settings')]);
+    }
   }catch(e){S.error=e.message}
   renderMain();
 }
@@ -955,7 +1107,7 @@ function renderBanner(viewers){
 const shareHost=h('div',{id:'fredvir-share'});shareHost.style.cssText='position:fixed;right:72px;bottom:20px;z-index:2147481000;display:none';
 const share=shareHost.attachShadow({mode:'open'});document.documentElement.append(shareHost);
 const SHARECSS=BASE+`
-.card{background:#fff;border-radius:16px;box-shadow:0 2px 12px #0003;padding:10px 12px;display:flex;align-items:center;gap:10px;max-width:440px;font-size:13px}
+.card{background:var(--card);border-radius:16px;box-shadow:0 2px 12px #0003;padding:10px 12px;display:flex;align-items:center;gap:10px;max-width:440px;font-size:13px}
 .card .ic{width:28px;height:28px;border-radius:8px;background:var(--gl);color:var(--g);display:grid;place-items:center;flex:none}
 .card .ic svg{width:18px;height:18px}
 .card{width:420px}.card .txt{flex:1;min-width:0}.card .txt b{display:block;font-size:13px}.card .txt span{color:var(--mut);font-size:12px}
@@ -994,6 +1146,22 @@ function renderShare(){
   share.replaceChildren(h('style',{},SHARECSS),card);shareHost.style.display='block';
 }
 setInterval(renderShare,800);
+
+// ---------- light / dark ----------
+// The sidebar section follows Gmail's own theme (it sits inside Gmail's sidebar). The Fredver pane and the share
+// card follow the person's choice in Settings → Appearance: System (match Gmail), Light or Dark.
+function gmailIsDark(){
+  const el=document.querySelector('[role="navigation"]')||document.body;
+  const m=getComputedStyle(el).color.match(/\d+/g);if(!m)return false;
+  const [r,g,b]=m.map(Number);return (0.299*r+0.587*g+0.114*b)>150;
+}
+let themePref=store.get('theme')||'system';
+function applyTheme(){
+  const gd=gmailIsDark()?'dark':'light',pane=themePref==='system'?gd:themePref;
+  if(navHost.dataset.theme!==gd)navHost.dataset.theme=gd;
+  for(const host of [mainHost,shareHost])if(host.dataset.theme!==pane)host.dataset.theme=pane;
+}
+setInterval(applyTheme,2000);
 
 // ---------- data ----------
 async function switchAccount(){await call('signout').catch(()=>{});Object.assign(S,{signedIn:false,email:'',me:null,inboxes:[],inbox:null,counts:{},members:[],authError:''});closePane();await doSignIn()}
@@ -1037,6 +1205,7 @@ async function loadThreads(){
   if(S.view==='assignee'&&S.viewAssignee)p.assigneeId=S.viewAssignee;
   if(S.view==='tag'&&S.viewTag)p.tagId=S.viewTag;
   if(S.view==='search')p.ids=S.searchIds.join(',');
+  if(S.view==='day')p.day=S.viewDay;
   try{S.threads=S.view==='search'&&!S.searchIds.length?[]:await api('/api/threads?'+new URLSearchParams(p))}catch(e){S.error=e.message}
   S.listLoading=false;if(!S.threadId&&!S.compose&&!searchFocused())renderMain();
 }
@@ -1060,5 +1229,5 @@ setInterval(()=>{if(!S.signedIn||document.hidden)return;loadCounts();loadNotifs(
 setInterval(()=>{if(S.signedIn&&!document.hidden)loadTags()},60000);
 addEventListener('beforeunload',leaveThread);
 
-renderNav();boot();
+applyTheme();renderNav();boot();
 })();
