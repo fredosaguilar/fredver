@@ -293,8 +293,8 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
           WHERE t.inbox_id=$1 AND t.first_message_at>now()-interval '30 days' GROUP BY t.id,t.first_message_at HAVING min(a.created_at)>t.first_message_at) x`,[id]),
       pool.query(`SELECT count(*) FILTER (WHERE status='open')::int open,count(*) FILTER (WHERE status='pending')::int pending,
           count(*) FILTER (WHERE status<>'closed' AND assignee_id IS NULL)::int unassigned FROM threads WHERE inbox_id=$1`,[id]),
-      pool.query(`SELECT count(*)::int n FROM threads t JOIN inboxes i ON i.id=t.inbox_id WHERE t.inbox_id=$1 AND t.status='open' AND t.awaiting_reply
-          AND t.last_client_message_at < now()-make_interval(hours=>i.sla_hours)`,[id])]);
+      pool.query(`SELECT count(*)::int n FROM threads t JOIN inboxes i ON i.id=t.inbox_id WHERE t.inbox_id=$1 AND ((t.status<>'closed' AND t.due_at IS NOT NULL AND t.due_at<now())
+          OR (t.status='open' AND t.due_at IS NULL AND t.awaiting_reply AND t.last_client_message_at < now()-make_interval(hours=>i.sla_hours)))`,[id])]);
     res.json({daily:daily.rows,people:people.rows,firstResponse:frt.rows[0],now:{...now.rows[0],overdue:overdue.rows[0].n}});
   }));
 }

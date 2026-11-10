@@ -185,6 +185,8 @@ function renderNav(){
           h('span',{class:'av'},initials(nm)),h('span',{class:'t'},nm+(m.id===S.me?.id?' (me)':'')),n?h('span',{class:'n'},n):null));
       }
     }
+    wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='scheduled'?' on':''),onclick:()=>openPanel('scheduled')},svg(NAV_ICON.pending),h('span',{class:'t'},'Scheduled'),
+      S.counts.scheduled?h('span',{class:'n'},S.counts.scheduled):null));
     wrap.append(h('div',{class:'sep'}));
     wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='notifications'?' on':''),onclick:()=>openPanel('notifications')},svg(NAV_ICON.bell),h('span',{class:'t'},'Notifications'),
       S.notifs.unread?h('span',{class:'badge'},S.notifs.unread):null));
@@ -219,7 +221,7 @@ const MAINCSS=BASE+`
 .row.unread .subj .s{font-weight:700}
 .tagc{display:inline-block;font-size:11px;font-weight:600;border:1px solid;border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px}
 .sla{font-size:11px;font-weight:700;border-radius:10px;padding:1px 8px;white-space:nowrap}
-.sla.over{background:#fce8e6;color:#c5221f}.sla.soon{background:#fef0e0;color:#b06000}
+.sla.over{background:#fce8e6;color:#c5221f}.sla.soon{background:#fef0e0;color:#b06000}.sla.due{background:#e8f0fe;color:#174ea6}
 .chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;background:#f1f3f4;border-radius:10px;padding:1px 8px 1px 2px;white-space:nowrap}
 .av{width:18px;height:18px;border-radius:50%;background:var(--g);color:#fff;font-size:9px;display:inline-grid;place-items:center;font-weight:600}
 .chip.none{padding:1px 8px;color:var(--mut);background:transparent;border:1px dashed var(--line)}
@@ -327,7 +329,14 @@ select.plain:hover{background:#0000000a}
 .saved{font-size:12px;color:var(--mut);align-self:center}
 .draftbar{display:flex;align-items:center;gap:12px;justify-content:space-between;background:#e8f0fe;color:#174ea6;border-radius:8px;padding:8px 12px;margin:16px 0 0 48px;font-size:13px;font-weight:500}
 .linkbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:#f1f3f4;color:#3c4043;border-radius:8px;padding:8px 12px;margin:0 0 8px;font-size:13px}
-.slaline{font-size:12px;font-weight:600;border-radius:6px;padding:6px 8px;margin-top:8px}.slaline.over{background:#fce8e6;color:#c5221f}.slaline.soon{background:#fef0e0;color:#b06000}
+.slaline{font-size:12px;font-weight:600;border-radius:6px;padding:6px 8px;margin-top:8px}.slaline.over{background:#fce8e6;color:#c5221f}.slaline.soon{background:#fef0e0;color:#b06000}.slaline.due{background:#e8f0fe;color:#174ea6}
+.duein{width:auto;padding:3px 6px;font-size:12px}
+.draftbar.bad{background:#fce8e6;color:#a50e0e}
+.menu.up{bottom:100%;top:auto;right:0}
+.schedwrap{margin-left:0}
+.menu.up{min-width:360px}.mit.sched{display:flex;justify-content:space-between;gap:16px;white-space:nowrap}
+.custom{display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line)}
+.custom input{width:auto;padding:4px 6px;font-size:12px}
 .tagrow{display:grid;grid-template-columns:88px 1fr;align-items:start;margin-top:10px;font-size:13px}.tagrow .k{color:var(--mut);padding-top:4px}
 .tagbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .tagc{display:inline-block;font-size:11px;font-weight:600;border:1px solid;border-radius:4px;padding:0 5px}
@@ -442,6 +451,11 @@ function renderList(){
 const dur=ms=>{const m=Math.round(ms/60000);if(m<60)return m+'m';const hh=Math.round(m/60);return hh<48?hh+'h':Math.round(hh/24)+'d'};
 // SLA: open conversations waiting on us. Overdue once the client has waited longer than the inbox's SLA hours.
 function slaState(t){
+  if(t.due_at&&t.status!=='closed'){
+    const left=new Date(t.due_at).getTime()-Date.now(),at=new Date(t.due_at).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    if(left<0)return {cls:'over',label:'Overdue '+dur(-left),title:'Due '+at};
+    return {cls:left<3600e3?'soon':'due',label:'Due '+(left<864e5?'in '+dur(left):at.replace(/,? \d{1,2}:\d\d.*$/,'')),title:'Due '+at};
+  }
   if(t.status!=='open'||!t.awaiting_reply||!t.last_client_message_at||!t.sla_hours)return null;
   const left=new Date(t.last_client_message_at).getTime()+t.sla_hours*3600e3-Date.now();
   if(left<0)return {cls:'over',label:'Overdue '+dur(-left),title:`No reply for ${dur(Date.now()-new Date(t.last_client_message_at))} (target ${t.sla_hours}h)`};
@@ -555,6 +569,11 @@ function renderConversation(){
     }
     th.append(card);
   });
+  for(const sc of d.scheduled||[])th.append(h('div',{class:'draftbar '+(sc.status==='failed'?'bad':'')},
+    sc.status==='failed'?`⚠ Scheduled reply by ${sc.by_name} failed: ${sc.error||'unknown error'}`:`⏰ Reply scheduled for ${fmtWhen(sc.send_at)} by ${sc.by_name}${sc.summary?.to?.length?' · to '+sc.summary.to.join(', '):''}`,
+    (sc.actor_id===S.me?.id||S.me?.role==='admin')&&sc.status!=='sending'?h('button',{class:'btn small ghost',onclick:async()=>{
+      if(sc.status!=='failed'&&!confirm('Cancel this scheduled reply? It will not be sent.'))return;
+      try{await api('/api/scheduled/'+sc.id,'DELETE');await loadDetail();loadCounts()}catch(e){alert(e.message)}}},sc.status==='failed'?'Dismiss':'Cancel'):null));
   if(d.draft&&!S.reply)th.append(h('div',{class:'draftbar'},
     `✎ Draft reply by ${d.draft.author}${d.draft.updated_by!==d.draft.author?', edited by '+d.draft.updated_by:''} · ${when(d.draft.updated_at)}`,
     h('button',{class:'btn small',onclick:()=>openDraft(d.draft)},'Open draft')));
@@ -587,6 +606,28 @@ function signatureBlock(){
     box.append(f);
   }
   return box;
+}
+
+// ---------- schedule send picker ----------
+const at=(d,h,m=0)=>{const x=new Date(d);x.setHours(h,m,0,0);return x};
+function schedulePresets(){
+  const now=new Date(),tom=new Date(now);tom.setDate(now.getDate()+1);
+  const mon=new Date(now);mon.setDate(now.getDate()+((8-now.getDay())%7||7));
+  const list=[];
+  if(now.getHours()<15)list.push(['Later today','4:00 PM',at(now,16)]);
+  list.push(['Tomorrow morning','8:00 AM',at(tom,8)],['Tomorrow afternoon','1:00 PM',at(tom,13)]);
+  if(mon.toDateString()!==tom.toDateString())list.push(['Monday morning','8:00 AM',at(mon,8)]);
+  return list;
+}
+const localInput=d=>{const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`};
+const fmtWhen=iso=>new Date(iso).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+function schedulePicker(onPick,disabled){
+  const menu=h('div',{class:'menu up',role:'menu',hidden:true});
+  const custom=h('input',{type:'datetime-local','aria-label':'Custom send time',value:localInput(at(new Date(Date.now()+864e5),8))});
+  menu.append(h('div',{class:'mie'},'Schedule send'),
+    ...schedulePresets().map(([a,b,d])=>h('button',{class:'mit sched',role:'menuitem',onclick:()=>{menu.hidden=true;onPick(d)}},h('span',{},a),h('span',{class:'hint'},d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'})+', '+b))),
+    h('div',{class:'custom'},custom,h('button',{class:'btn small',onclick:()=>{const d=new Date(custom.value);if(isNaN(d)||d<Date.now()+60000)return alert('Pick a time at least a minute from now.');menu.hidden=true;onPick(d)}},'Schedule')));
+  return h('div',{class:'tplwrap schedwrap'},h('button',{class:'btn ghost',disabled,title:'Schedule send','aria-haspopup':'menu',onclick:()=>{menu.hidden=!menu.hidden}},'⏰ Schedule'),menu);
 }
 
 // ---------- formatted editor with templates ----------
@@ -641,13 +682,14 @@ function renderCompose(){
   const bar=h('div',{class:'bar'},h('h2',{},'New email'),h('span',{style:'margin-left:auto'}),iconBtn('close','Discard and close',()=>{S.compose=null;closePane()}));
   const field=(k,label,attrs={})=>h('label',{class:'cf'},h('span',{},label),h('input',{value:c[k],'aria-label':label,oninput:e=>{c[k]=e.target.value},...attrs}));
   const [tb,ed]=editor(c,{placeholder:'Write your message',extra:{client:''}});
-  const send=async()=>{
+  const send=async sendAt=>{
     c.error='';
     if(!splitAddr(c.to).length||!c.subject.trim()||!plainOf(c.html)){c.error='To, subject and message are required.';return renderMain()}
     c.sending=true;renderMain();
-    try{const r=await api('/api/inboxes/'+S.inbox.id+'/compose','POST',{from:c.from||'shared',to:splitAddr(c.to),cc:splitAddr(c.cc),bcc:splitAddr(c.bcc),subject:c.subject,bodyHtml:c.html,signature:sigOn&&!!S.signature,files:await readFiles(c.files)});
+    try{const r=await api('/api/inboxes/'+S.inbox.id+'/compose','POST',{from:c.from||'shared',to:splitAddr(c.to),cc:splitAddr(c.cc),bcc:splitAddr(c.bcc),subject:c.subject,bodyHtml:c.html,signature:sigOn&&!!S.signature,files:await readFiles(c.files),...(sendAt?{sendAt:sendAt.toISOString()}:{})});
       S.compose=null;loadCounts();
-      if(r.id)await openThread(r.id);else openView('sent');
+      if(r.scheduled){alert('Scheduled for '+fmtWhen(r.sendAt)+'. You can see or cancel it under Scheduled.');openPanel('scheduled')}
+      else if(r.id)await openThread(r.id);else openView('sent');
     }catch(e){c.error=e.message.includes('Invalid')?'Check the email addresses.':e.message;c.sending=false;renderMain()}
   };
   const form=h('div',{class:'thread compose'},
@@ -656,7 +698,7 @@ function renderCompose(){
     field('to','To',{placeholder:'client@example.com, another@example.com'}),field('cc','Cc'),field('bcc','Bcc'),field('subject','Subject'),tb,ed,attachPicker(c),signatureBlock(),
     h('div',{class:'hint'},fromHint(c.from||'shared')+' The conversation is assigned to you.'),
     c.error?h('div',{class:'err'},c.error):null,
-    h('div',{class:'acts'},h('button',{class:'btn',disabled:c.sending,onclick:send},c.sending?'Sending…':'Send'),
+    h('div',{class:'acts'},h('button',{class:'btn',disabled:c.sending,onclick:()=>send()},c.sending?'Sending…':'Send'),schedulePicker(d=>send(d),c.sending),
       h('button',{class:'btn ghost',onclick:()=>{S.compose=null;openView(S.view,S.viewAssignee)}},'Discard')));
   return [bar,form];
 }
@@ -700,13 +742,13 @@ function renderReply(){
   const box=h('div',{class:'reply'});
   const last=S.detail.messages.at(-1);
   const atts=r.mode==='forward'?([...S.detail.messages].reverse().find(m=>!internal(addrOf(m.from)))||last).attachments||[]:[];
-  const send=async status=>{
+  const send=async(status,sendAt)=>{
     r.error='';
     if(!splitAddr(r.to).length){r.error='Add at least one recipient.';return renderMain()}
     if(!plainOf(r.html)&&r.mode!=='forward'){r.error='Write a message first.';return renderMain()}
     r.sending=true;renderMain();
     try{
-      await api('/api/threads/'+S.threadId+'/send','POST',{mode:r.mode,from:r.from,to:splitAddr(r.to),cc:splitAddr(r.cc),bcc:splitAddr(r.bcc),bodyHtml:r.html||'',includeAttachments:r.attach,signature:sigOn&&!!S.signature,files:await readFiles(r.files),...(status?{status}:{})});
+      await api('/api/threads/'+S.threadId+'/send','POST',{mode:r.mode,from:r.from,to:splitAddr(r.to),cc:splitAddr(r.cc),bcc:splitAddr(r.bcc),bodyHtml:r.html||'',includeAttachments:r.attach,signature:sigOn&&!!S.signature,files:await readFiles(r.files),...(status?{status}:{}),...(sendAt?{sendAt:sendAt.toISOString()}:{})});
       S.reply=null;S.replying=false;await loadDetail();loadCounts();
     }catch(e){r.error=e.message.includes('Invalid')?'Check the email addresses.':e.message;r.sending=false;renderMain()}
   };
@@ -741,6 +783,7 @@ function renderReply(){
       h('button',{class:'btn',disabled:r.sending,onclick:()=>send()},r.sending?'Sending…':'Send'),
       h('button',{class:'btn close',disabled:r.sending,onclick:()=>send('closed')},'Send & Close'),
       h('button',{class:'btn ghost',disabled:r.sending,onclick:()=>send('pending')},'Send & mark Pending'),
+      schedulePicker(d=>send(undefined,d),r.sending),
       review,h('span',{class:'saved'},r.saved?'Draft saved for the team':''))].filter(Boolean));
   return box;
 }
@@ -759,7 +802,11 @@ function renderSide(){
         Object.entries(STATUS).map(([k,v])=>h('option',{value:k,selected:t.status===k},v))))));
   if(t.assignee_id!==S.me?.id)side.append(h('button',{class:'link',style:'margin:2px 0 0 96px',onclick:()=>patch({assigneeId:S.me.id})},'Assign to me'));
   const due=slaState({...t,sla_hours:t.sla_hours});
-  if(due)side.append(h('div',{class:'slaline '+due.cls},due.label+' · '+due.title));
+  side.append(h('div',{class:'tagrow'},h('span',{class:'k'},'Due'),h('div',{class:'tagbox'},
+    h('input',{type:'datetime-local',class:'duein','aria-label':'Due date',value:t.due_at?localInput(new Date(t.due_at)):'',
+      onchange:e=>{const v=e.target.value;if(!v)return patch({dueAt:null});const d2=new Date(v);if(!isNaN(d2))patch({dueAt:d2.toISOString()})}}),
+    t.due_at?h('button',{class:'link',onclick:()=>patch({dueAt:null})},'Clear'):h('span',{class:'hint'},`Default: reply within ${t.sla_hours||4}h`))));
+  if(due)side.append(h('div',{class:'slaline '+due.cls},t.due_at?(due.cls==='over'?due.label+' · was '+due.title.toLowerCase():due.title):due.label+' · '+due.title));
   const tagAct=async(fn)=>{try{await fn();await Promise.all([loadDetail(),loadTags()])}catch(e){alert(e.message)}};
   const have=new Set((d.tags||[]).map(g=>g.id));
   side.append(h('div',{class:'tagrow'},h('span',{class:'k'},'Tags'),h('div',{class:'tagbox'},
@@ -788,6 +835,9 @@ function describe(a){
   if(a.action==='forward.sent')return `${who} forwarded to ${(m.to||[]).join(', ')}`;
   if(a.action==='compose.sent')return `${who} started this conversation`;
   if(a.action==='thread.reopened')return 'Reopened by a new client message';
+  if(a.action==='thread.due')return m.to?`${who} set the due date to ${fmtWhen(m.to)}`:`${who} cleared the due date`;
+  if(a.action==='reply.scheduled')return `${who} scheduled a reply for ${fmtWhen(m.sendAt)}`;
+  if(a.action==='reply.schedule_canceled')return `${who} canceled a scheduled reply`;
   if(a.action==='thread.shared')return `${who} added this from their mailbox`;
   if(a.action==='thread.moved')return 'Moved into the shared inbox (the client replied to it)';
   if(a.action==='tag.added')return `${who} added tag “${m.tag}”`;
@@ -798,9 +848,9 @@ function describe(a){
   return `${who} updated the conversation`;
 }
 // ---------- panels: notifications, reports, settings ----------
-const KIND={assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,reply:n=>`New reply from ${n.detail||'the client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
+const KIND={scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,reply:n=>`New reply from ${n.detail||'the client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
 function renderPanel(){
-  const title={notifications:'Notifications',reports:'Reports · last 30 days',settings:'Settings'}[S.panel];
+  const title={notifications:'Notifications',reports:'Reports · last 30 days',settings:'Settings',scheduled:'Scheduled'}[S.panel];
   const bar=h('div',{class:'bar'},h('h2',{},title),h('span',{style:'margin-left:auto'}),
     S.panel==='notifications'&&S.notifs.unread?h('button',{class:'btn ghost small',onclick:async()=>{await api('/api/notifications/read','POST',{all:true});await loadNotifs();renderMain()}},'Mark all read'):null,
     iconBtn('refresh','Refresh',()=>loadPanel()),iconBtn('close','Close',closePane));
@@ -809,9 +859,24 @@ function renderPanel(){
     if(!S.notifs.items.length)body.append(h('div',{class:'empty'},h('strong',{},'No notifications'),"You'll be notified when someone assigns you a conversation, mentions you in a note, asks you to review a draft, or a client replies to one of yours."));
     for(const n of S.notifs.items)body.append(h('button',{class:'nrow'+(n.read_at?'':' unread'),onclick:async()=>{
         await api('/api/notifications/read','POST',{ids:[n.id]}).catch(()=>{});if(n.thread_id)openThread(n.thread_id);loadNotifs()}},
-      h('span',{class:'nk '+n.kind},{assigned:'👤',mention:'@',reply:'↩',draft:'✎'}[n.kind]||'•'),
+      h('span',{class:'nk '+n.kind},{assigned:'👤',mention:'@',reply:'↩',draft:'✎',scheduled_failed:'⚠'}[n.kind]||'•'),
       h('div',{class:'nt'},h('b',{},KIND[n.kind]?.(n)||n.kind),h('div',{},n.subject||''),n.kind==='mention'&&n.detail?h('div',{class:'nq'},'“'+n.detail+'”'):null),
       h('span',{class:'time',title:full(n.created_at)},when(n.created_at))));
+  }
+  if(S.panel==='scheduled'){
+    const list=S.scheduledList;
+    if(!list)body.append(h('div',{class:'loading'},'Loading…'));
+    else if(!list.length)body.append(h('div',{class:'empty'},h('strong',{},'Nothing scheduled'),'Use ⏰ Schedule next to Send in a reply or new email.'));
+    else for(const sc of list)body.append(h('div',{class:'nrow'+(sc.status==='failed'?' unread':'')},
+      h('span',{class:'nk'},sc.status==='failed'?'⚠':'⏰'),
+      h('button',{class:'nt',style:'text-align:left',onclick:()=>sc.thread_id&&openThread(sc.thread_id)},
+        h('b',{},(sc.kind==='reply'?(sc.summary?.mode==='forward'?'Forward':'Reply'):'New email')+' · '+(sc.summary?.subject||'(no subject)')),
+        h('div',{},'To '+(sc.summary?.to||[]).join(', ')+' · by '+sc.by_name),
+        sc.status==='failed'?h('div',{class:'nq',style:'color:#a50e0e'},'Failed: '+(sc.error||'')):null),
+      h('span',{class:'time',title:full(sc.send_at)},sc.status==='failed'?'':fmtWhen(sc.send_at)),
+      (sc.actor_id===S.me?.id||S.me?.role==='admin')&&sc.status!=='sending'?h('button',{class:'btn small ghost',onclick:async()=>{
+        if(sc.status!=='failed'&&!confirm('Cancel this scheduled email? It will not be sent.'))return;
+        try{await api('/api/scheduled/'+sc.id,'DELETE');await loadPanel();loadCounts()}catch(e){alert(e.message)}}},sc.status==='failed'?'Dismiss':'Cancel'):null));
   }
   if(S.panel==='reports'){
     const r=S.report;
@@ -874,6 +939,7 @@ function renderPanel(){
 async function loadPanel(){
   try{
     if(S.panel==='notifications')await loadNotifs();
+    if(S.panel==='scheduled'){S.scheduledList=null;renderMain();S.scheduledList=await api('/api/inboxes/'+S.inbox.id+'/scheduled')}
     if(S.panel==='reports'){S.report=null;renderMain();S.report=await api('/api/inboxes/'+S.inbox.id+'/reports')}
     if(S.panel==='settings'&&S.me?.role==='admin'){[S.team,S.settings]=await Promise.all([api('/api/inboxes/'+S.inbox.id+'/team'),api('/api/inboxes/'+S.inbox.id+'/settings')]);await Promise.all([loadTags(),loadTemplates()])}
   }catch(e){S.error=e.message}

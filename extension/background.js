@@ -52,7 +52,7 @@ async function download(path){
 // ---------- desktop notifications ----------
 // Every minute, check for new Fredver notifications (assigned, @mentioned, client replied, draft review)
 // and show them as Chrome notifications. Clicking one opens the conversation in Gmail.
-const TEXT={assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
+const TEXT={scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
   reply:n=>`New reply from ${n.detail||'a client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
 async function pollNotifications(){
   const {idToken}=await saved();if(!idToken)return;
