@@ -27,8 +27,26 @@ const ICON={
   close:'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
   refresh:'M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z',
   inbox:'M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z',
-  attach:'M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z'};
-const iconBtn=(icon,title,onclick)=>h('button',{class:'icon',title,'aria-label':title,onclick},svg(ICON[icon]));
+  attach:'M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z',
+  trash:'M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+  done:'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
+  unread:'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z',
+  read:'M21.99 8c0-.72-.37-1.35-.94-1.7L12 1 2.95 6.3C2.38 6.65 2 7.28 2 8v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2l-.01-10zM12 13 3.74 7.84 12 3l8.26 4.84L12 13z',
+  person:'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+  clock:'M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z',
+  label:'M17.63 5.84C17.27 5.33 16.67 5 16 5L5 5.01C3.9 5.01 3 5.9 3 7v10c0 1.1.9 1.99 2 1.99L16 19c.67 0 1.27-.33 1.63-.84L22 12l-4.37-6.16z',
+  restore:'M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18z'};
+const iconBtn=(icon,title,onclick,cls='')=>h('button',{class:'icon '+cls,title,'aria-label':title,onclick},svg(ICON[icon]));
+// One place for actions on one or more conversations (row icons, toolbar, drag and drop, bulk bar).
+async function act(ids,body,label,{undo}={}){
+  try{await api('/api/threads/bulk','POST',{ids,...body})}catch(e){alert(e.message);return false}
+  S.sel.clear();if(S.threadId&&ids.includes(S.threadId)&&(body.delete||body.status==='closed')){leaveThread();renderNav()}
+  await Promise.all([S.threadId?loadDetail():loadThreads(),loadCounts(),loadTags()]);
+  toast(`${label}${ids.length>1?' · '+ids.length+' conversations':''}`,undo?{label:'Undo',fn:async()=>{await api('/api/threads/bulk','POST',{ids,...undo});await Promise.all([loadThreads(),loadCounts()])}}:undefined);
+  return true;
+}
+const del=ids=>{if(!confirm(ids.length>1?`Delete ${ids.length} conversations? They move to Trash (Gmail deletes them for good after 30 days).`:'Delete this conversation? It moves to Trash (Gmail deletes it for good after 30 days).'))return;
+  return act(ids,{delete:true},'Deleted',{undo:{restore:true}})};
 function when(iso){if(!iso)return '';const d=new Date(iso),n=new Date();
   if(d.toDateString()===n.toDateString())return d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
   if(d.getFullYear()===n.getFullYear())return d.toLocaleDateString([],{month:'short',day:'numeric'});
@@ -113,6 +131,7 @@ const NAVCSS=BASE+`
 .hint2{color:var(--mut);font-size:12px;height:auto;padding-top:4px;padding-bottom:4px}
 .badge{background:var(--danger);color:var(--onG);border-radius:10px;font-size:11px;font-weight:700;padding:0 6px;margin-left:8px}
 .sep{height:1px;background:var(--line);margin:6px 16px 6px 42px}
+.row.dropover{background:var(--gl);outline:2px dashed var(--g);outline-offset:-2px}
 .float{position:fixed;left:12px;bottom:12px;width:256px;background:var(--card);border-radius:16px;box-shadow:0 4px 24px #0003;z-index:2147483000;padding:8px 0}`;
 
 // Gmail's sidebar is found by its Inbox link (role="navigation" also matches the narrow Mail/Chat/Meet
@@ -172,27 +191,27 @@ function renderNav(){
     const active=(v,a=null)=>S.open&&!S.threadId&&!S.compose&&!S.panel&&S.view===v&&(v!=='assignee'||S.viewAssignee===a)&&(v!=='tag'||S.viewTag===a);
     for(const v of ['unassigned','mine','open','pending','overdue','closed','sent','all']){
       const n=S.counts[v],show=n>0&&['unassigned','mine','pending','overdue'].includes(v);
-      wrap.append(h('button',{class:'row kid'+(active(v)?' on':'')+(v==='overdue'&&n>0?' red':''),onclick:()=>openView(v)},svg(NAV_ICON[v]),h('span',{class:'t'},NAV_LABEL[v]),
+      wrap.append(h('button',{class:'row kid'+(active(v)?' on':'')+(v==='overdue'&&n>0?' red':''),onclick:()=>openView(v),...droppable('view',v)},svg(NAV_ICON[v]),h('span',{class:'t'},NAV_LABEL[v]),
         show?h('span',{class:'n'+(v==='unassigned'||v==='mine'||v==='overdue'?' b':'')},n):null));
     }
     wrap.append(h('button',{class:'row kid','aria-expanded':String(tagsOpen),onclick:()=>{tagsOpen=!tagsOpen;store.set('tags',tagsOpen?'1':'0');renderNav()}},
       svg(NAV_ICON.tag),h('span',{class:'t'},'Tags'),svg(tagsOpen?NAV_ICON.chevD:NAV_ICON.chevR)));
-    if(tagsOpen){
+    if(tagsOpen||dragIds){
       if(!S.tags.length)wrap.append(h('div',{class:'row kid2 hint2'},'No tags yet. Add one from a conversation.'));
-      for(const g of S.tags)wrap.append(h('button',{class:'row kid2'+(active('tag',g.id)?' on':''),onclick:()=>openView('tag',null,g.id)},
+      for(const g of S.tags)wrap.append(h('button',{class:'row kid2'+(active('tag',g.id)?' on':''),onclick:()=>openView('tag',null,g.id),...droppable('tag',g)},
         h('span',{class:'dot',style:'background:'+g.color}),h('span',{class:'t'},g.name),g.open_count?h('span',{class:'n'},g.open_count):null));
     }
     {
       wrap.append(h('button',{class:'row kid','aria-expanded':String(teamOpen),onclick:()=>{teamOpen=!teamOpen;store.set('team',teamOpen?'1':'0');renderNav()}},
         svg(NAV_ICON.team),h('span',{class:'t'},'Team'),svg(teamOpen?NAV_ICON.chevD:NAV_ICON.chevR)));
       if(teamOpen&&S.members.length<2)wrap.append(h('div',{class:'row kid2',style:'color:var(--mut);font-size:12px;height:auto;padding-top:4px;padding-bottom:4px'},'Only you so far. Teammates appear here once they are added.'));
-      if(teamOpen)for(const m of S.members){
+      if(teamOpen||dragIds)for(const m of S.members){
         const n=S.counts.byAssignee?.[m.id],nm=m.display_name||m.email;
-        wrap.append(h('button',{class:'row kid2'+(active('assignee',m.id)?' on':''),title:'Open conversations assigned to '+nm,onclick:()=>openView('assignee',m.id)},
+        wrap.append(h('button',{class:'row kid2'+(active('assignee',m.id)?' on':''),title:'Open conversations assigned to '+nm+' · drop conversations here to assign',onclick:()=>openView('assignee',m.id),...droppable('member',m)},
           h('span',{class:'av'},initials(nm)),h('span',{class:'t'},nm+(m.id===S.me?.id?' (me)':'')),n?h('span',{class:'n'},n):null));
       }
     }
-    wrap.append(h('button',{class:'row kid'+(active('trash')?' on':''),onclick:()=>openView('trash')},svg(NAV_ICON.trash),h('span',{class:'t'},'Trash')));
+    wrap.append(h('button',{class:'row kid'+(active('trash')?' on':''),onclick:()=>openView('trash'),...droppable('view','trash')},svg(NAV_ICON.trash),h('span',{class:'t'},'Trash')));
     wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='scheduled'?' on':''),onclick:()=>openPanel('scheduled')},svg(NAV_ICON.pending),h('span',{class:'t'},'Scheduled'),
       S.counts.scheduled?h('span',{class:'n'},S.counts.scheduled):null));
     wrap.append(h('div',{class:'sep'}));
@@ -224,6 +243,15 @@ const MAINCSS=BASE+`
 .row .meta{display:flex;gap:6px;align-items:center}
 .row .time{text-align:right;font-size:12px;color:var(--mut);font-weight:600}
 .row .subj .s{font-weight:400}
+.row{position:relative}
+.hov{display:none;position:absolute;right:8px;top:50%;transform:translateY(-50%);gap:2px;padding:0 4px 0 18px;align-items:center;
+  background:linear-gradient(90deg,transparent,var(--card) 16px)}
+.row:hover .time,.row:focus-within .time{visibility:hidden}
+.row:hover .meta>.chip:last-child,.row:focus-within .meta>.chip:last-child{visibility:hidden}
+.row:hover .hov,.row:focus-within .hov{display:flex}
+.hov .icon{width:32px;height:32px}.hov .icon svg{width:18px;height:18px}
+.icon.danger:hover{color:var(--danger);background:var(--dangerl)}
+.row.dragging{opacity:.5}
 .row:focus-visible{outline:2px solid var(--g);outline-offset:-2px}
 .row.sel,.row.sel:not(.unread){background:var(--gl)}
 .rowsel,.selall{width:16px;height:16px;margin:0;accent-color:var(--g);cursor:pointer}
@@ -365,6 +393,11 @@ select.plain:hover{background:var(--hover)}
 .duein{width:auto;padding:3px 6px;font-size:12px}
 .draftbar.bad{background:var(--dangerl);color:var(--danger)}
 .menu.up{bottom:100%;top:auto;right:0}
+.menu.down{top:100%;bottom:auto;left:0;right:auto;margin-top:4px;min-width:240px}
+.tsep{width:1px;height:20px;background:var(--line);margin:0 6px}
+.bar .tplwrap{margin-left:0}
+.dot2{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+.mit:disabled{opacity:.5}
 .schedwrap{margin-left:0}
 .menu.up{min-width:360px}.mit.sched{display:flex;justify-content:space-between;gap:16px;white-space:nowrap}
 .custom{display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line)}
@@ -533,8 +566,16 @@ function renderList(){
   for(const t of S.threads){
     const due=slaState(t);
     const on=S.sel.has(t.id);
-    list.append(h('div',{class:'row'+(t.unread?' unread':'')+(on?' sel':''),role:'button',tabindex:'0',onclick:()=>openThread(t.id),
-        onkeydown:e=>{if(e.key==='Enter'&&e.target===e.currentTarget)openThread(t.id)}},
+    const stop=fn=>e=>{e.stopPropagation();fn()};
+    const hov=h('div',{class:'hov'},
+      S.view==='trash'?iconBtn('restore','Restore',stop(()=>act([t.id],{restore:true},'Restored'))):null,
+      S.view!=='trash'&&t.status!=='closed'?iconBtn('done','Close',stop(()=>act([t.id],{status:'closed'},'Closed',{undo:{status:t.status}}))):null,
+      S.view!=='trash'?iconBtn('trash','Delete',stop(()=>del([t.id])),'danger'):null,
+      iconBtn(t.unread?'read':'unread',t.unread?'Mark as read':'Mark as unread',stop(()=>act([t.id],{read:!!t.unread},t.unread?'Marked read':'Marked unread'))),
+      t.assignee_id!==S.me?.id&&S.view!=='trash'?iconBtn('person','Assign to me',stop(()=>act([t.id],{assigneeId:S.me.id},'Assigned to you'))):null);
+    list.append(h('div',{class:'row'+(t.unread?' unread':'')+(on?' sel':''),role:'button',tabindex:'0',draggable:'true',onclick:()=>openThread(t.id),
+        onkeydown:e=>{if(e.key==='Enter'&&e.target===e.currentTarget)openThread(t.id)},
+        ondragstart:e=>startDrag(e,on?[...S.sel]:[t.id],t.subject),ondragend:endDrag},hov,
       h('input',{type:'checkbox',class:'rowsel',checked:on,'aria-label':'Select '+t.subject,
         onclick:e=>{e.stopPropagation();on?S.sel.delete(t.id):S.sel.add(t.id);renderMain()},onkeydown:e=>e.stopPropagation()}),
       h('div',{class:'from',title:t.from_email},t.from_name||t.from_email||'(unknown)',t.message_count>1?h('small',{},t.message_count):null),
@@ -679,17 +720,37 @@ function attachmentCards(m){
   wrap.append(grid);return wrap;
 }
 
+// Gmail-style toolbar for the open conversation: close, delete, mark unread, due date ("snooze"), assign, tag.
+function convToolbar(d){
+  const t=d.thread,id=t.id,sep=()=>h('span',{class:'tsep'});
+  if(t.deleted_at)return [sep(),iconBtn('restore','Restore from Trash',()=>act([id],{restore:true},'Restored'))];
+  const dueMenu=h('div',{class:'menu down',role:'menu',hidden:true});
+  const setDue=d2=>{dueMenu.hidden=true;api('/api/threads/'+id,'PATCH',{dueAt:d2?d2.toISOString():null}).then(()=>{loadDetail();loadCounts();toast(d2?'Due '+fmtWhen(d2.toISOString()):'Due date cleared')}).catch(e=>alert(e.message))};
+  const now=new Date(),tom=new Date(now);tom.setDate(now.getDate()+1);const mon=new Date(now);mon.setDate(now.getDate()+((8-now.getDay())%7||7));
+  dueMenu.append(...[h('div',{class:'mie'},'Set a due date'),
+    ...[now.getHours()<16?['Later today',at(now,16)]:null,['Tomorrow',at(tom,9)],['Next week',at(mon,9)]].filter(Boolean).map(([l,d2])=>
+      h('button',{class:'mit sched',role:'menuitem',onclick:()=>setDue(d2)},h('span',{},l),h('span',{class:'hint'},fmtWhen(d2.toISOString())))),
+    t.due_at?h('button',{class:'mit',role:'menuitem',onclick:()=>setDue(null)},'Clear due date'):null,
+    h('div',{class:'mie small'},'Pick any date and time in the side panel')].filter(Boolean));
+  const tagMenu=h('div',{class:'menu down',role:'menu',hidden:true});
+  const have=new Set((d.tags||[]).map(g=>g.id));
+  tagMenu.append(h('div',{class:'mie'},'Add tag'),...S.tags.map(g=>h('button',{class:'mit',role:'menuitem',disabled:have.has(g.id),onclick:()=>{tagMenu.hidden=true;act([id],{tagId:g.id},'Tagged “'+g.name+'”')}},
+    h('span',{class:'dot2',style:'background:'+g.color}),g.name,have.has(g.id)?' ✓':'')));
+  const toggle=m=>()=>{for(const x of [dueMenu,tagMenu])if(x!==m)x.hidden=true;m.hidden=!m.hidden};
+  return [sep(),
+    t.status!=='closed'?iconBtn('done','Close conversation',()=>act([id],{status:'closed'},'Closed',{undo:{status:t.status}})):iconBtn('unread','Reopen',()=>act([id],{status:'open'},'Reopened')),
+    iconBtn('trash','Delete',()=>del([id]),'danger'),
+    iconBtn('unread','Mark as unread',async()=>{const ok=await act([id],{read:false},'Marked unread');if(ok){leaveThread();renderNav();renderMain();loadThreads()}}),
+    sep(),
+    h('div',{class:'tplwrap'},iconBtn('clock','Due date',toggle(dueMenu)),dueMenu),
+    t.assignee_id!==S.me?.id?iconBtn('person','Assign to me',()=>act([id],{assigneeId:S.me.id},'Assigned to you')):null,
+    S.tags.length?h('div',{class:'tplwrap'},iconBtn('label','Tag',toggle(tagMenu)),tagMenu):null];
+}
+
 function renderConversation(){
   const d=S.detail;
   const bar=h('div',{class:'bar'},iconBtn('back','Back to list',()=>{leaveThread();renderNav();renderMain();loadThreads()}),
-    h('span',{class:'sub'},d?d.thread.inbox_name:''),h('span',{style:'margin-left:auto'}),
-    d?h('button',{class:'btn ghost small',onclick:async()=>{const id=S.threadId;leaveThread();await api('/api/threads/'+id+'/unread','POST').catch(()=>{});renderNav();renderMain();loadThreads()}},'Mark unread'):null,
-    d&&!d.thread.deleted_at?h('button',{class:'btn ghost small danger',title:'Move to Trash',onclick:async()=>{
-      if(!confirm('Delete this conversation? It moves to Trash (Gmail deletes it for good after 30 days).'))return;
-      const id=S.threadId;try{await api('/api/threads/'+id+'/delete','POST')}catch(e){return alert(e.message)}
-      leaveThread();renderNav();renderMain();loadThreads();loadCounts();
-      toast('Conversation deleted',{label:'Undo',fn:async()=>{await api('/api/threads/'+id+'/restore','POST');loadThreads();loadCounts();openThread(id)}})}},'🗑 Delete'):null,
-    d&&d.thread.deleted_at?h('button',{class:'btn small',onclick:async()=>{try{await api('/api/threads/'+S.threadId+'/restore','POST');await loadDetail();loadCounts();toast('Restored')}catch(e){alert(e.message)}}},'↩ Restore'):null,
+    ...(d?convToolbar(d):[]),h('span',{style:'margin-left:auto'}),h('span',{class:'sub'},d?d.thread.inbox_name:''),
     iconBtn('close','Close shared inbox',closePane));
   if(!d)return [bar,h('div',{class:'loading'},S.error?h('div',{class:'err'},S.error):'Loading conversation…')];
   const t=d.thread,mailbox=t.inbox_email.toLowerCase();
@@ -1288,6 +1349,32 @@ function applyTheme(){
   for(const host of [mainHost,shareHost])if(host.dataset.theme!==pane)host.dataset.theme=pane;
 }
 setInterval(applyTheme,2000);
+
+// ---------- drag conversations onto sidebar items ----------
+let dragIds=null;
+function startDrag(e,ids,subject){
+  dragIds=ids;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',ids.length>1?`${ids.length} conversations`:subject);
+  const ghost=document.createElement('div');ghost.textContent=ids.length>1?`${ids.length} conversations`:subject;
+  ghost.style.cssText='position:fixed;top:-100px;left:0;padding:6px 12px;background:#1d4a3b;color:#fff;border-radius:12px;font:600 13px Arial;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+  document.body.append(ghost);e.dataTransfer.setDragImage(ghost,10,10);setTimeout(()=>ghost.remove(),0);
+  e.currentTarget.classList.add('dragging');renderNav();
+}
+function endDrag(e){e.currentTarget?.classList?.remove('dragging');setTimeout(()=>{dragIds=null;renderNav()},0)}
+// What dropping on a sidebar item does.
+function dropTarget(kind,arg){
+  if(kind==='tag')return {body:{tagId:arg.id},label:'Tagged “'+arg.name+'”'};
+  if(kind==='member')return {body:{assigneeId:arg.id},label:'Assigned to '+(arg.display_name||arg.email)};
+  if(kind==='view')return ({unassigned:{body:{assigneeId:null},label:'Unassigned'},mine:{body:{assigneeId:S.me?.id},label:'Assigned to you'},
+    open:{body:{status:'open'},label:'Marked Open'},pending:{body:{status:'pending'},label:'Marked Pending'},closed:{body:{status:'closed'},label:'Closed'},
+    trash:{body:{delete:true},label:'Deleted',undo:{restore:true}}})[arg]||null;
+  return null;
+}
+function droppable(kind,arg){
+  const t=dropTarget(kind,arg);if(!t)return {};
+  return {ondragover:e=>{if(!dragIds)return;e.preventDefault();e.dataTransfer.dropEffect='move';e.currentTarget.classList.add('dropover')},
+    ondragleave:e=>e.currentTarget.classList.remove('dropover'),
+    ondrop:e=>{e.preventDefault();e.currentTarget.classList.remove('dropover');const ids=dragIds;dragIds=null;if(ids?.length)act(ids,t.body,t.label,{undo:t.undo})}};
+}
 
 // ---------- data ----------
 async function switchAccount(){await call('signout').catch(()=>{});Object.assign(S,{signedIn:false,email:'',me:null,inboxes:[],inbox:null,counts:{},members:[],authError:''});closePane();await doSignIn()}
