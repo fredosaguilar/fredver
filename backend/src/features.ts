@@ -4,7 +4,7 @@ import type {Express} from 'express';
 import sanitizeHtml from 'sanitize-html';
 import {z} from 'zod';
 import {pool} from './db.js';
-import {gmail,header,isInternal,parseAddress,sharedMailbox} from './gmail.js';
+import {GmailError,MODIFY,gmail,header,importRaw,isInternal,parseAddress,sharedMailbox} from './gmail.js';
 import {applyThread,sharedInboxId} from './sync.js';
 
 type Actor={id:string;email:string;role:string;display_name:string};
@@ -254,6 +254,51 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     catch(e){await c.query('ROLLBACK');throw e}finally{c.release()}
     console.log(JSON.stringify({event:'thread.unshared',by:req.actor.email,thread:t.id}));
     res.json({ok:true});
+  }));
+
+  // ---------- save conversations under the employee's own Gmail labels ----------
+  // Lists the signed-in employee's own Gmail labels, and copies shared conversations into their mailbox under one
+  // of them. Only ever the employee's own mailbox. Repeating it copies only messages not yet copied.
+  const needModify=(e:any)=>e instanceof GmailError&&(e.code==='unauthorized_client'||e.status===503);
+  async function myLabels(email:string){
+    const r=await gmail('labels',{as:email});
+    return (r.labels||[]).filter((l:any)=>l.type==='user'&&l.labelListVisibility!=='labelHide')
+      .map((l:any)=>({id:l.id,name:l.name,color:l.color?.backgroundColor||null})).sort((a:any,b:any)=>a.name.localeCompare(b.name));
+  }
+  app.get('/api/me/labels',wrap(async(req:any,res:any)=>{
+    try{res.json(await myLabels(req.actor.email))}catch(e){if(needModify(e))return res.json([]);throw e}
+  }));
+  app.post('/api/threads/label-mine',wrap(async(req:any,res:any)=>{
+    const {ids,labelId}=z.object({ids:z.array(uuid).min(1).max(50),labelId:z.string().min(1).max(200)}).parse(req.body);
+    const me=req.actor.email.toLowerCase();
+    const labels=await myLabels(me);const label=labels.find((l:any)=>l.id===labelId);
+    if(!label)return res.status(404).json({error:'That label is not in your Gmail'});
+    let copied=0,labeled=0;
+    for(const id of ids){
+      const t=await h.authorizedThread(id,req.actor);if(!t)continue;
+      try{
+        if(t.source_mailbox&&t.source_mailbox.toLowerCase()===me){
+          // Already in this employee's mailbox: just add the label to the original.
+          await gmail(`threads/${encodeURIComponent(t.gmail_thread_id)}/modify`,{as:me,scope:MODIFY,method:'POST',body:{addLabelIds:[labelId]}});labeled++;continue;
+        }
+        const src=t.source_mailbox||undefined;
+        const prev=(await pool.query('SELECT gmail_thread_id,copied_message_ids FROM personal_copies WHERE thread_id=$1 AND user_id=$2',[t.id,req.actor.id])).rows[0];
+        let copyThread:string|null=prev?.gmail_thread_id||null;const done=new Set<string>(prev?.copied_message_ids||[]);
+        if(copyThread)await gmail(`threads/${encodeURIComponent(copyThread)}/modify`,{as:me,scope:MODIFY,method:'POST',body:{addLabelIds:[labelId]}}).catch(()=>{copyThread=null});
+        const full=await gmail(`threads/${encodeURIComponent(t.gmail_thread_id)}?format=minimal`,{as:src});
+        for(const m of full.messages||[]){
+          if(done.has(m.id))continue;
+          const r=await gmail(`messages/${encodeURIComponent(m.id)}?format=raw`,{as:src});
+          const imp=await importRaw(Buffer.from(r.raw,'base64url'),{as:me,labelIds:[labelId],threadId:copyThread});
+          copyThread=copyThread||imp.threadId;done.add(m.id);copied++;
+        }
+        await pool.query(`INSERT INTO personal_copies(thread_id,user_id,gmail_thread_id,copied_message_ids,updated_at) VALUES($1,$2,$3,$4,now())
+          ON CONFLICT(thread_id,user_id) DO UPDATE SET gmail_thread_id=EXCLUDED.gmail_thread_id,copied_message_ids=EXCLUDED.copied_message_ids,updated_at=now()`,[t.id,req.actor.id,copyThread,[...done]]);
+        labeled++;
+      }catch(e){if(needModify(e))return res.status(503).json({error:'Saving to your Gmail needs the gmail.modify permission in domain-wide delegation.'});throw e}
+    }
+    console.log(JSON.stringify({event:'label.mine',by:me,label:label.name,conversations:labeled,messagesCopied:copied}));
+    res.json({labeled,copied,label:label.name});
   }));
 
   // ---------- team management (admins) ----------

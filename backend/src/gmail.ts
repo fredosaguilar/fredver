@@ -130,3 +130,16 @@ export async function sendRaw(raw:string,opts:{as?:string;threadId?:string}={}){
   if(!r.ok){const t=await r.text();console.error('gmail send failed',r.status,t.slice(0,500));throw new GmailError(r.status===413?'The email is too large for Gmail (25 MB limit).':`Gmail API ${r.status}`,r.status===413?413:502)}
   return r.json() as Promise<any>;
 }
+
+// Put a complete RFC 822 message into a mailbox (as an employee, their own mailbox only) with the given
+// labels, keeping its original date. Used to save shared conversations under an employee's own Gmail labels.
+export async function importRaw(raw:Buffer,opts:{as:string;labelIds:string[];threadId?:string|null}){
+  const boundary='fvi_'+Math.random().toString(36).slice(2);
+  const meta=JSON.stringify({labelIds:opts.labelIds,...(opts.threadId?{threadId:opts.threadId}:{})});
+  const body=Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`),
+    raw,Buffer.from(`\r\n--${boundary}--`)]);
+  const r=await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/import?uploadType=multipart&internalDateSource=dateHeader&neverMarkSpam=true',
+    {method:'POST',headers:{Authorization:'Bearer '+await token(MODIFY,opts.as.toLowerCase()),'Content-Type':`multipart/related; boundary=${boundary}`},body});
+  if(!r.ok){const t=await r.text();console.error('gmail import failed',r.status,t.slice(0,300));throw new GmailError(`Could not save to your Gmail (${r.status})`,502)}
+  return r.json() as Promise<any>;
+}

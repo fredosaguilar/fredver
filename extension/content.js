@@ -47,6 +47,30 @@ async function act(ids,body,label,{undo}={}){
 }
 const del=ids=>{if(!confirm(ids.length>1?`Delete ${ids.length} conversations? They move to Trash (Gmail deletes them for good after 30 days).`:'Delete this conversation? It moves to Trash (Gmail deletes it for good after 30 days).'))return;
   return act(ids,{delete:true},'Deleted',{undo:{restore:true}})};
+// ---------- the employee's own Gmail labels ----------
+// Saves a copy of shared conversations into the signed-in employee's own mailbox under one of their labels.
+let myLabelsP=null;
+const myLabels=(fresh)=>{if(fresh||!myLabelsP)myLabelsP=api('/api/me/labels').catch(e=>{myLabelsP=null;throw e});return myLabelsP};
+async function labelMine(ids,label){
+  toast(`Saving to your Gmail label “${label.name}”…`);
+  try{const r=await api('/api/threads/label-mine','POST',{ids,labelId:label.id});
+    S.sel.clear();if(!S.threadId)renderMain();
+    toast(`Saved to your Gmail label “${r.label}”${ids.length>1?' · '+r.labeled+' conversations':''}`);return true}
+  catch(e){alert(e.message);return false}
+}
+// A searchable menu of the employee's own Gmail labels. onPick(label) is called with the chosen one.
+function myLabelMenu(onPick){
+  const m=h('div',{class:'menu down mylabels',role:'menu',hidden:true});
+  const q=h('input',{class:'mlq',placeholder:'Search your labels','aria-label':'Search your Gmail labels'});
+  const list=h('div',{class:'mll'});
+  const draw=labels=>{const f=q.value.trim().toLowerCase();list.replaceChildren(...labels.filter(l=>!f||l.name.toLowerCase().includes(f)).slice(0,80).map(l=>
+    h('button',{class:'mit',role:'menuitem',onclick:()=>{m.hidden=true;onPick(l)}},h('span',{class:'dot2',style:'background:'+(l.color||'#9aa0a6')}),l.name)));
+    if(!list.children.length)list.append(h('div',{class:'mie small'},labels.length?'No matching labels':'You have no Gmail labels yet. Create one in Gmail’s left sidebar.'))};
+  m.load=()=>{list.replaceChildren(h('div',{class:'mie small'},'Loading your labels…'));myLabels().then(ls=>{q.oninput=()=>draw(ls);draw(ls)}).catch(e=>list.replaceChildren(h('div',{class:'mie small'},e.message)));setTimeout(()=>q.focus(),0)};
+  m.append(h('div',{class:'mie'},'Save to my Gmail label'),q,list,h('div',{class:'mie small'},'Adds a copy to your own mailbox under that label.'));
+  return m;
+}
+
 function when(iso){if(!iso)return '';const d=new Date(iso),n=new Date();
   if(d.toDateString()===n.toDateString())return d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
   if(d.getFullYear()===n.getFullYear())return d.toLocaleDateString([],{month:'short',day:'numeric'});
@@ -256,6 +280,7 @@ const MAINCSS=BASE+`
 .row.sel,.row.sel:not(.unread){background:var(--gl)}
 .rowsel,.selall{width:16px;height:16px;margin:0;accent-color:var(--g);cursor:pointer}
 .bulkbar{background:var(--gl);gap:10px;flex-wrap:wrap}
+.mylabels{min-width:240px;max-height:360px;display:flex;flex-direction:column}.mylabels .mll{overflow:auto;max-height:240px}.mlq{margin:4px 10px 6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font:inherit;background:var(--card);color:var(--ink)}
 .bsel{width:auto;padding:5px 8px;font-size:13px;border-radius:16px}
 .btn.danger{color:var(--danger)}.btn.danger:hover{background:var(--dangerl)}
 .newbtn{margin-left:4px;white-space:nowrap}
@@ -550,6 +575,7 @@ function renderList(){
       h('button',{class:'btn small',onclick:()=>bulk({status:'closed'},'Closed')},'✓ Close'),
       h('select',{class:'bsel','aria-label':'Tag selected',onchange:e=>{const v=e.target.value;e.target.value='';if(v)bulk({tagId:v},'Tagged '+(S.tags.find(g=>g.id===v)?.name||''))}},
         h('option',{value:''},'Add tag…'),S.tags.map(g=>h('option',{value:g.id},g.name))),
+      (()=>{const m=myLabelMenu(l=>labelMine([...S.sel],l));return h('div',{class:'tplwrap'},h('button',{class:'btn ghost small',onclick:()=>{m.hidden=!m.hidden;if(!m.hidden)m.load()}},'📁 My Gmail label…'),m)})(),
       S.view==='trash'?h('button',{class:'btn small',onclick:()=>bulk({restore:true},'Restored')},'↩ Restore')
         :h('button',{class:'btn ghost small danger',onclick:()=>{if(confirm(`Delete ${S.sel.size} conversation${S.sel.size>1?'s':''}? They move to Trash (Gmail deletes them for good after 30 days).`))bulk({delete:true},'Deleted')}},'🗑 Delete'),
       h('button',{class:'btn ghost small',onclick:()=>bulk({read:true},'Marked read')},'Mark read'),
@@ -736,7 +762,8 @@ function convToolbar(d){
   const have=new Set((d.tags||[]).map(g=>g.id));
   tagMenu.append(h('div',{class:'mie'},'Add tag'),...S.tags.map(g=>h('button',{class:'mit',role:'menuitem',disabled:have.has(g.id),onclick:()=>{tagMenu.hidden=true;act([id],{tagId:g.id},'Tagged “'+g.name+'”')}},
     h('span',{class:'dot2',style:'background:'+g.color}),g.name,have.has(g.id)?' ✓':'')));
-  const toggle=m=>()=>{for(const x of [dueMenu,tagMenu])if(x!==m)x.hidden=true;m.hidden=!m.hidden};
+  const mineMenu=myLabelMenu(l=>labelMine([id],l));
+  const toggle=m=>()=>{for(const x of [dueMenu,tagMenu,mineMenu])if(x!==m)x.hidden=true;m.hidden=!m.hidden;if(!m.hidden)m.load?.()};
   return [sep(),
     t.status!=='closed'?iconBtn('done','Close conversation',()=>act([id],{status:'closed'},'Closed',{undo:{status:t.status}})):iconBtn('unread','Reopen',()=>act([id],{status:'open'},'Reopened')),
     iconBtn('trash','Delete',()=>del([id]),'danger'),
@@ -744,7 +771,8 @@ function convToolbar(d){
     sep(),
     h('div',{class:'tplwrap'},iconBtn('clock','Due date',toggle(dueMenu)),dueMenu),
     t.assignee_id!==S.me?.id?iconBtn('person','Assign to me',()=>act([id],{assigneeId:S.me.id},'Assigned to you')):null,
-    S.tags.length?h('div',{class:'tplwrap'},iconBtn('label','Tag',toggle(tagMenu)),tagMenu):null];
+    S.tags.length?h('div',{class:'tplwrap'},iconBtn('label','Tag',toggle(tagMenu)),tagMenu):null,
+    h('div',{class:'tplwrap'},h('button',{class:'btn ghost small',title:'Save a copy to one of your own Gmail labels',onclick:toggle(mineMenu)},'📁 My Gmail label'),mineMenu)];
 }
 
 function renderConversation(){
@@ -1353,7 +1381,7 @@ setInterval(applyTheme,2000);
 // ---------- drag conversations onto sidebar items ----------
 let dragIds=null;
 function startDrag(e,ids,subject){
-  dragIds=ids;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',ids.length>1?`${ids.length} conversations`:subject);
+  dragIds=ids;e.dataTransfer.effectAllowed='copyMove';myLabels().catch(()=>{});e.dataTransfer.setData('text/plain',ids.length>1?`${ids.length} conversations`:subject);
   const ghost=document.createElement('div');ghost.textContent=ids.length>1?`${ids.length} conversations`:subject;
   ghost.style.cssText='position:fixed;top:-100px;left:0;padding:6px 12px;background:#1d4a3b;color:#fff;border-radius:12px;font:600 13px Arial;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
   document.body.append(ghost);e.dataTransfer.setDragImage(ghost,10,10);setTimeout(()=>ghost.remove(),0);
@@ -1375,6 +1403,25 @@ function droppable(kind,arg){
     ondragleave:e=>e.currentTarget.classList.remove('dropover'),
     ondrop:e=>{e.preventDefault();e.currentTarget.classList.remove('dropover');const ids=dragIds;dragIds=null;if(ids?.length)act(ids,t.body,t.label,{undo:t.undo})}};
 }
+
+// Gmail's own sidebar labels (the employee's own mailbox) also accept dragged conversations.
+const gmailLabelLink=e=>{const a=e.target?.closest?.('a[href*="#label/"]');return a&&!a.closest('#fredver-nav')?a:null};
+const labelNameFromHref=href=>{try{return decodeURIComponent(href.split('#label/')[1].split('/')[0].replace(/\+/g,' '))}catch{return ''}};
+let overLink=null;
+const unmark=()=>{if(overLink){overLink.style.outline='';overLink.style.background='';overLink=null}};
+document.addEventListener('dragover',e=>{
+  if(!dragIds)return;const a=gmailLabelLink(e);if(!a){unmark();return}
+  e.preventDefault();e.dataTransfer.dropEffect='copy';
+  if(overLink!==a){unmark();overLink=a;a.style.outline='2px dashed #1d4a3b';a.style.background='rgba(29,74,59,.12)'}
+},true);
+document.addEventListener('dragend',unmark,true);
+document.addEventListener('drop',async e=>{
+  if(!dragIds)return;const a=gmailLabelLink(e);if(!a)return;
+  e.preventDefault();e.stopPropagation();unmark();
+  const ids=dragIds;dragIds=null;const name=labelNameFromHref(a.getAttribute('href'));
+  try{const ls=await myLabels(true);const l=ls.find(x=>x.name.toLowerCase()===name.toLowerCase());
+    if(!l)return alert(`Couldn't find your Gmail label “${name}”.`);await labelMine(ids,l)}catch(err){alert(err.message)}
+},true);
 
 // ---------- data ----------
 async function switchAccount(){await call('signout').catch(()=>{});Object.assign(S,{signedIn:false,email:'',me:null,inboxes:[],inbox:null,counts:{},members:[],authError:''});closePane();await doSignIn()}
