@@ -1,30 +1,41 @@
 importScripts('config.js');
 const redirect=chrome.identity.getRedirectURL('oauth');
 
-// ID tokens live in chrome.storage.session: memory-only, cleared when Chrome closes, and not
-// readable by content scripts. Expired tokens are renewed silently when Google allows it.
+// The short-lived ID token (1 hour) lives in chrome.storage.session: memory-only and not readable by content
+// scripts. The account's email is remembered in chrome.storage.local, so after Chrome restarts (or the token
+// expires) Fredver signs back in silently with Google, as long as the person is still signed in to Google.
 const decode=t=>JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-async function saved(){const {idToken,email}=await chrome.storage.session.get(['idToken','email']);return {idToken,email}}
+async function saved(){
+  const {idToken}=await chrome.storage.session.get('idToken');
+  const {fredverEmail}=await chrome.storage.local.get('fredverEmail');
+  return {idToken,email:fredverEmail};
+}
 
 async function signIn(interactive,hint){
   const state=crypto.randomUUID(),nonce=crypto.randomUUID();
   const params=new URLSearchParams({client_id:CONFIG.clientId,redirect_uri:redirect,response_type:'id_token',scope:'openid email profile',state,nonce,
     prompt:interactive?'select_account':'none',hd:CONFIG.domain});
   if(hint)params.set('login_hint',hint);
-  const url=await chrome.identity.launchWebAuthFlow({url:'https://accounts.google.com/o/oauth2/v2/auth?'+params,interactive});
+  const url=await chrome.identity.launchWebAuthFlow({url:'https://accounts.google.com/o/oauth2/v2/auth?'+params,interactive,
+    ...(interactive?{}:{abortOnLoadForNonInteractive:false,timeoutMsForNonInteractive:15000})});
   if(!url)throw Error('Sign in cancelled');
   const out=new URLSearchParams(new URL(url).hash.slice(1));
   if(out.get('state')!==state||!out.get('id_token'))throw Error(out.get('error')||'Sign-in failed');
   const idToken=out.get('id_token');const body=decode(idToken);
   if(body.nonce!==nonce)throw Error('Sign-in failed (nonce mismatch)');
-  await chrome.storage.session.set({idToken,email:body.email});
+  await chrome.storage.session.set({idToken});
+  await chrome.storage.local.set({fredverEmail:body.email});
   return idToken;
 }
 
+let renewing=null;
 async function token(){
   const {idToken,email}=await saved();
   if(idToken&&decode(idToken).exp*1000>Date.now()+120000)return idToken;
-  if(email){try{return await signIn(false,email)}catch{}}
+  if(email){
+    renewing=renewing||signIn(false,email).finally(()=>{renewing=null});
+    try{return await renewing}catch{}
+  }
   await chrome.storage.session.remove(['idToken']);
   const e=Error('Sign in required');e.code='auth';throw e;
 }
@@ -55,7 +66,7 @@ async function download(path){
 const TEXT={due:n=>'Due now',scheduled_failed:n=>'Your scheduled email failed',assigned:n=>`${n.actor||'Someone'} assigned you`,mention:n=>`${n.actor||'Someone'} mentioned you`,
   reply:n=>`New reply from ${n.detail||'a client'}`,draft:n=>`${n.actor||'Someone'} asked you to review a draft`};
 async function pollNotifications(){
-  const {idToken}=await saved();if(!idToken)return;
+  const {idToken,email}=await saved();if(!idToken&&!email)return; // api() renews the sign-in when needed
   let data;try{data=await api({path:'/api/notifications'})}catch{return}
   const {lastNotified=0,notifyOff=false}=await chrome.storage.local.get(['lastNotified','notifyOff']);
   const fresh=data.items.filter(n=>!n.read_at&&n.id>lastNotified).slice(0,5).reverse();
@@ -78,9 +89,12 @@ chrome.notifications.onClicked.addListener(async id=>{
 
 chrome.runtime.onMessage.addListener((m,_sender,reply)=>{
   (async()=>{
-    if(m.type==='status'){const {idToken,email}=await saved();return {signedIn:!!idToken,email}}
+    if(m.type==='status'){
+      const {email}=await saved();
+      try{await token();return {signedIn:true,email}}catch{return {signedIn:false,email}}
+    }
     if(m.type==='auth'){await signIn(true);return {ok:true}}
-    if(m.type==='signout'){await chrome.storage.session.clear();return {ok:true}}
+    if(m.type==='signout'){await chrome.storage.session.clear();await chrome.storage.local.remove('fredverEmail');return {ok:true}}
     if(m.type==='api')return {data:await api(m)};
     if(m.type==='testNotify'){await chrome.notifications.create('fredver-test-'+Date.now(),{type:'basic',iconUrl:'icons/icon128.png',
       title:'Fredver notifications are working',message:"You'll see alerts like this for assignments, @mentions, client replies and due dates.",priority:1});return {ok:true}}

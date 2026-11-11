@@ -15,7 +15,7 @@ import {OAuth2Client} from 'google-auth-library';
 import {z} from 'zod';
 import {pool} from './db.js';
 import {syncInbox} from './sync.js';
-import {embedInline,gmail,GmailError,header,isInternal,messageParts,parseAddress,sharedMailbox,signatureFor,sendRaw} from './gmail.js';
+import {MODIFY,embedInline,gmail,GmailError,header,isInternal,messageParts,parseAddress,sharedMailbox,signatureFor,sendRaw} from './gmail.js';
 import {buildMime,clean,encodeHeader,escapeHtml,htmlToText,newMessageId,textToHtml} from './mime.js';
 
 const app=express();
@@ -101,12 +101,12 @@ app.get('/api/inboxes/:id/counts',wrap(async(req:any,res:any)=>{
     count(*)::int "all",
     count(*) FILTER (WHERE (status<>'closed' AND due_at IS NOT NULL AND due_at<now()) OR (status='open' AND due_at IS NULL AND awaiting_reply AND last_client_message_at < now()-make_interval(hours=>(SELECT sla_hours FROM inboxes WHERE id=$1))))::int overdue,
     (SELECT count(*) FROM scheduled_sends WHERE inbox_id=$1 AND status IN ('pending','sending','failed') AND (status<>'failed' OR created_at>now()-interval '7 days'))::int scheduled
-    FROM threads WHERE inbox_id=$1`,[req.params.id,req.actor.id]);
-  const team=await pool.query(`SELECT assignee_id,count(*)::int n FROM threads WHERE inbox_id=$1 AND assignee_id IS NOT NULL AND status<>'closed' GROUP BY assignee_id`,[req.params.id]);
+    FROM threads WHERE inbox_id=$1 AND deleted_at IS NULL`,[req.params.id,req.actor.id]);
+  const team=await pool.query(`SELECT assignee_id,count(*)::int n FROM threads WHERE inbox_id=$1 AND deleted_at IS NULL AND assignee_id IS NOT NULL AND status<>'closed' GROUP BY assignee_id`,[req.params.id]);
   res.json({...rows[0],byAssignee:Object.fromEntries(team.rows.map(r=>[r.assignee_id,r.n]))});
 }));
 
-const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent','overdue','tag','search','day'] as const;
+const VIEWS=['unassigned','mine','open','pending','closed','all','assignee','sent','overdue','tag','search','day','trash'] as const;
 app.get('/api/threads',wrap(async(req:any,res:any)=>{
   const input=z.object({inboxId:z.string().uuid(),view:z.enum(VIEWS).default('all'),assigneeId:z.string().uuid().optional(),tagId:z.string().uuid().optional(),
     ids:z.string().max(2000).optional(),day:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),q:z.string().trim().max(200).optional()}).parse(req.query);
@@ -124,8 +124,8 @@ app.get('/api/threads',wrap(async(req:any,res:any)=>{
     LEFT JOIN thread_reads r ON r.thread_id=t.id AND r.user_id=$1 LEFT JOIN users u ON u.id=t.assignee_id
     LEFT JOIN LATERAL (SELECT a.created_at AS sent_at,su.display_name AS sent_by FROM audit_events a JOIN users su ON su.id=a.actor_id
       WHERE a.thread_id=t.id AND a.action IN ('reply.sent','forward.sent','compose.sent') ORDER BY a.created_at DESC LIMIT 1) s ON true
-    WHERE t.inbox_id=$2 AND (
-      $3::text='all' OR ($3::text='unassigned' AND t.assignee_id IS NULL AND t.status<>'closed')
+    WHERE t.inbox_id=$2 AND (t.deleted_at IS NULL)=($3::text<>'trash') AND (
+      $3::text='all' OR $3::text='trash' OR ($3::text='unassigned' AND t.assignee_id IS NULL AND t.status<>'closed')
       OR ($3::text='mine' AND t.assignee_id=$1 AND t.status<>'closed')
       OR ($3::text='assignee' AND t.assignee_id=$5::uuid AND t.status<>'closed')
       OR ($3::text='sent' AND s.sent_at IS NOT NULL) OR t.status=$3::text
@@ -134,7 +134,7 @@ app.get('/api/threads',wrap(async(req:any,res:any)=>{
       OR ($3::text='search' AND t.gmail_thread_id=ANY($7::text[]))
       OR ($3::text='day' AND (t.first_message_at AT TIME ZONE 'America/Los_Angeles')::date=$8::date))
     AND ($4::text IS NULL OR t.subject ILIKE $4 OR t.from_email ILIKE $4 OR t.from_name ILIKE $4 OR t.snippet ILIKE $4)
-    ORDER BY CASE WHEN $3::text='sent' THEN s.sent_at END DESC NULLS LAST,CASE WHEN $3::text='overdue' THEN coalesce(t.due_at,t.last_client_message_at+make_interval(hours=>i.sla_hours)) END ASC,t.last_message_at DESC NULLS LAST,t.updated_at DESC LIMIT 200`,
+    ORDER BY CASE WHEN $3::text='trash' THEN t.deleted_at END DESC NULLS LAST,CASE WHEN $3::text='sent' THEN s.sent_at END DESC NULLS LAST,CASE WHEN $3::text='overdue' THEN coalesce(t.due_at,t.last_client_message_at+make_interval(hours=>i.sla_hours)) END ASC,t.last_message_at DESC NULLS LAST,t.updated_at DESC LIMIT 200`,
     [req.actor.id,input.inboxId,input.view,q,input.assigneeId??null,input.tagId??null,ids,input.day??null]);
   res.json(rows);
 }));
@@ -239,11 +239,32 @@ app.patch('/api/threads/:id',wrap(async(req:any,res:any)=>{
   res.json(rows[0]);
 }));
 
+// Delete = move the Gmail conversation to Trash (shared mailbox) and hide it in Fredver. Conversations added from
+// an employee's own mailbox are only hidden in Fredver: their mailbox is not touched. Restore undoes both.
+const NEED_MODIFY='Deleting needs one more Gmail permission: an administrator must add the gmail.modify scope to domain-wide delegation.';
+async function trashThread(t:any,actor:Actor,restore=false){
+  if(!t.source_mailbox){
+    try{await gmail(`threads/${encodeURIComponent(t.gmail_thread_id)}/${restore?'untrash':'trash'}`,{scope:MODIFY,method:'POST'})}
+    catch(e){if(e instanceof GmailError&&(e.code==='unauthorized_client'||e.status===503))throw new GmailError(NEED_MODIFY,503);if(!(e instanceof GmailError&&e.status===404))throw e}
+  }
+  await pool.query(restore?'UPDATE threads SET deleted_at=NULL,deleted_by=NULL,updated_at=now() WHERE id=$1':'UPDATE threads SET deleted_at=now(),deleted_by=$2,updated_at=now() WHERE id=$1',restore?[t.id]:[t.id,actor.id]);
+  if(!restore)await pool.query('DELETE FROM presence WHERE thread_id=$1',[t.id]);
+  await audit(actor.id,t.id,restore?'thread.restored':'thread.deleted');
+}
+app.post('/api/threads/:id/delete',wrap(async(req:any,res:any)=>{
+  const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
+  await trashThread(t,req.actor);res.json({ok:true});
+}));
+app.post('/api/threads/:id/restore',wrap(async(req:any,res:any)=>{
+  const t=await authorizedThread(req.params.id,req.actor);if(!t)return res.sendStatus(404);
+  await trashThread(t,req.actor,true);res.json({ok:true});
+}));
+
 // Bulk actions on several conversations at once (assign, status, tag, read/unread).
 app.post('/api/threads/bulk',wrap(async(req:any,res:any)=>{
   const input=z.object({ids:z.array(z.string().uuid()).min(1).max(200),status:z.enum(['open','pending','closed']).optional(),
-    assigneeId:z.string().uuid().nullable().optional(),tagId:z.string().uuid().optional(),read:z.boolean().optional()})
-    .refine(v=>v.status!==undefined||v.assigneeId!==undefined||v.tagId!==undefined||v.read!==undefined,'Choose an action').parse(req.body);
+    assigneeId:z.string().uuid().nullable().optional(),tagId:z.string().uuid().optional(),read:z.boolean().optional(),delete:z.boolean().optional(),restore:z.boolean().optional()})
+    .refine(v=>v.status!==undefined||v.assigneeId!==undefined||v.tagId!==undefined||v.read!==undefined||v.delete||v.restore,'Choose an action').parse(req.body);
   const threads=(await Promise.all([...new Set(input.ids)].map(id=>authorizedThread(id,req.actor)))).filter(Boolean);
   if(!threads.length)return res.sendStatus(404);
   const inboxId=threads[0].inbox_id;
@@ -259,6 +280,10 @@ app.post('/api/threads/bulk',wrap(async(req:any,res:any)=>{
     if(!g)return res.status(400).json({error:'Unknown tag'});tagName=g.name;
   }
   let changed=0;
+  if(input.delete||input.restore){
+    for(const t of threads){await trashThread(t,req.actor,!!input.restore);changed++}
+    return res.json({updated:threads.length,changed});
+  }
   for(const t of threads){
     if(input.status&&input.status!==t.status){
       await pool.query('UPDATE threads SET status=$1,updated_at=now() WHERE id=$2',[input.status,t.id]);

@@ -1,8 +1,8 @@
 import {pool} from './db.js';
 import {gmail,header,isInternal,parseAddress,sharedMailbox} from './gmail.js';
 
-type Prev={id:string;status:string;message_count:number;gmail_history_id:string|null;assignee_id:string|null;source_mailbox:string|null}|undefined;
-const PREV_COLS='id,status,message_count,gmail_history_id,assignee_id,source_mailbox';
+type Prev={id:string;status:string;message_count:number;gmail_history_id:string|null;assignee_id:string|null;source_mailbox:string|null;deleted_at?:Date|null}|undefined;
+const PREV_COLS='id,status,message_count,gmail_history_id,assignee_id,source_mailbox,deleted_at';
 
 // Read one Gmail conversation and write it to Fredver. `mailbox` is where the conversation lives: null for the
 // shared mailbox, or an employee's address for a conversation they added from their own mailbox.
@@ -59,6 +59,11 @@ export async function applyThread(inboxId:string,gid:string,historyId:string|nul
     // New client message on an assigned conversation: tell the assignee.
     if(newClientMsg&&prev!.assignee_id)
       await client.query(`INSERT INTO notifications(user_id,thread_id,kind,detail) VALUES($1,$2,'reply',$3)`,[prev!.assignee_id,id,(from.name||from.email).slice(0,120)]);
+    // A client writing again to a deleted conversation brings it back (open).
+    if(newClientMsg&&prev!.deleted_at){
+      await client.query(`UPDATE threads SET deleted_at=NULL,deleted_by=NULL,status='open',updated_at=now() WHERE id=$1`,[id]);
+      await client.query(`INSERT INTO audit_events(thread_id,action,metadata) VALUES($1,'thread.restored','{"reason":"new client message"}')`,[id]);
+    }
     // A client replying to a closed conversation reopens it.
     let reopened=false;
     if(newClientMsg&&prev!.status==='closed'){
@@ -117,7 +122,7 @@ export async function syncInbox({maxThreads=100}:{maxThreads?:number}={}){
 }
 
 async function syncLinked(inboxId:string){
-  const {rows}=await pool.query(`SELECT ${PREV_COLS},gmail_thread_id FROM threads WHERE inbox_id=$1 AND source_mailbox IS NOT NULL
+  const {rows}=await pool.query(`SELECT ${PREV_COLS},gmail_thread_id FROM threads WHERE inbox_id=$1 AND source_mailbox IS NOT NULL AND deleted_at IS NULL
     AND (status<>'closed' OR last_message_at>now()-interval '30 days') ORDER BY last_message_at DESC NULLS LAST LIMIT 300`,[inboxId]);
   let checked=0,updated=0;
   for(const row of rows){

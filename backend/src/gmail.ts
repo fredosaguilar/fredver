@@ -5,6 +5,7 @@ import {GoogleAuth} from 'google-auth-library';
 // act only on the configured shared mailbox, with only the requested scope.
 export const READ='https://www.googleapis.com/auth/gmail.readonly';
 export const SEND='https://www.googleapis.com/auth/gmail.send';
+export const MODIFY='https://www.googleapis.com/auth/gmail.modify';
 const auth=new GoogleAuth({scopes:['https://www.googleapis.com/auth/cloud-platform']});
 const cache=new Map<string,{token:string;exp:number}>();
 

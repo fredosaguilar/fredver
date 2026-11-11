@@ -47,7 +47,7 @@ export async function notifyMentions(body:string,threadId:string,inboxId:string,
 // Tell the assignee when a conversation's manual due date arrives (once per due date).
 export async function notifyDue(){
   const {rows}=await pool.query(`UPDATE threads SET due_notified_at=now() WHERE due_at IS NOT NULL AND due_at<=now() AND due_notified_at IS NULL
-    AND status<>'closed' RETURNING id,assignee_id,subject`);
+    AND status<>'closed' AND deleted_at IS NULL RETURNING id,assignee_id,subject`);
   for(const r of rows)if(r.assignee_id)await pool.query(`INSERT INTO notifications(user_id,thread_id,kind,detail) VALUES($1,$2,'due',$3)`,[r.assignee_id,r.id,(r.subject||'').slice(0,200)]);
   return rows.length;
 }
@@ -107,7 +107,7 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
   app.get('/api/inboxes/:id/tags',wrap(async(req:any,res:any)=>{
     if(!await memberOf(req.params.id,req.actor.id))return res.sendStatus(404);
     const {rows}=await pool.query(`SELECT g.id,g.name,g.color,count(t.id) FILTER (WHERE t.status<>'closed')::int open_count
-      FROM tags g LEFT JOIN thread_tags x ON x.tag_id=g.id LEFT JOIN threads t ON t.id=x.thread_id WHERE g.inbox_id=$1 GROUP BY g.id ORDER BY lower(g.name)`,[req.params.id]);
+      FROM tags g LEFT JOIN thread_tags x ON x.tag_id=g.id LEFT JOIN threads t ON t.id=x.thread_id AND t.deleted_at IS NULL WHERE g.inbox_id=$1 GROUP BY g.id ORDER BY lower(g.name)`,[req.params.id]);
     res.json(rows);
   }));
   app.post('/api/inboxes/:id/tags',wrap(async(req:any,res:any)=>{
@@ -344,13 +344,13 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
     if(!await memberOf(req.params.id,req.actor.id))return res.sendStatus(404);
     const id=req.params.id;
     const [daily,people,frt,now,overdue]=await Promise.all([
-      pool.query(`SELECT to_char(d,'YYYY-MM-DD') AS day,(SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.first_message_at>=d AND t.first_message_at<d+interval '1 day')::int AS received
+      pool.query(`SELECT to_char(d,'YYYY-MM-DD') AS day,(SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.deleted_at IS NULL AND t.first_message_at>=d AND t.first_message_at<d+interval '1 day')::int AS received
         FROM generate_series(date_trunc('day',now() AT TIME ZONE 'America/Los_Angeles')-interval '29 days',date_trunc('day',now() AT TIME ZONE 'America/Los_Angeles'),interval '1 day') d ORDER BY d`,[id]),
       pool.query(`SELECT u.display_name AS name,
           count(*) FILTER (WHERE a.action IN ('reply.sent','forward.sent','compose.sent'))::int AS sent,
           count(*) FILTER (WHERE a.action='thread.status' AND a.metadata->>'to'='closed')::int AS closed,
-          (SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.assignee_id=u.id AND t.status='open')::int AS open_now,
-          (SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.assignee_id=u.id AND t.status='pending')::int AS pending_now
+          (SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.deleted_at IS NULL AND t.assignee_id=u.id AND t.status='open')::int AS open_now,
+          (SELECT count(*) FROM threads t WHERE t.inbox_id=$1 AND t.deleted_at IS NULL AND t.assignee_id=u.id AND t.status='pending')::int AS pending_now
         FROM users u JOIN inbox_members m ON m.user_id=u.id AND m.inbox_id=$1
         LEFT JOIN audit_events a ON a.actor_id=u.id AND a.created_at>now()-interval '30 days'
         WHERE u.active GROUP BY u.id ORDER BY sent DESC`,[id]),
@@ -359,8 +359,8 @@ export function registerFeatures(app:Express,h:{authorizedThread:(id:string,a:Ac
           JOIN audit_events a ON a.thread_id=t.id AND a.action IN ('reply.sent','forward.sent')
           WHERE t.inbox_id=$1 AND t.first_message_at>now()-interval '30 days' GROUP BY t.id,t.first_message_at HAVING min(a.created_at)>t.first_message_at) x`,[id]),
       pool.query(`SELECT count(*) FILTER (WHERE status='open')::int open,count(*) FILTER (WHERE status='pending')::int pending,
-          count(*) FILTER (WHERE status<>'closed' AND assignee_id IS NULL)::int unassigned FROM threads WHERE inbox_id=$1`,[id]),
-      pool.query(`SELECT count(*)::int n FROM threads t JOIN inboxes i ON i.id=t.inbox_id WHERE t.inbox_id=$1 AND ((t.status<>'closed' AND t.due_at IS NOT NULL AND t.due_at<now())
+          count(*) FILTER (WHERE status<>'closed' AND assignee_id IS NULL)::int unassigned FROM threads WHERE inbox_id=$1 AND deleted_at IS NULL`,[id]),
+      pool.query(`SELECT count(*)::int n FROM threads t JOIN inboxes i ON i.id=t.inbox_id WHERE t.inbox_id=$1 AND t.deleted_at IS NULL AND ((t.status<>'closed' AND t.due_at IS NOT NULL AND t.due_at<now())
           OR (t.status='open' AND t.due_at IS NULL AND t.awaiting_reply AND t.last_client_message_at < now()-make_interval(hours=>i.sla_hours)))`,[id])]);
     res.json({daily:daily.rows,people:people.rows,firstResponse:frt.rows[0],now:{...now.rows[0],overdue:overdue.rows[0].n}});
   }));

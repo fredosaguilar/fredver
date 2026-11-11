@@ -1,7 +1,7 @@
 (()=>{
 if(window.__fredvir)return;window.__fredvir=true;
 
-const VIEWS=[['unassigned','Unassigned'],['mine','Assigned to me'],['open','Open'],['pending','Pending'],['overdue','Overdue'],['closed','Closed'],['sent','Sent'],['all','All conversations'],['tag','Tag'],['search','Search results'],['day','Received']];
+const VIEWS=[['unassigned','Unassigned'],['mine','Assigned to me'],['open','Open'],['pending','Pending'],['overdue','Overdue'],['closed','Closed'],['sent','Sent'],['all','All conversations'],['tag','Tag'],['search','Search results'],['day','Received'],['trash','Trash']];
 const S={signedIn:false,email:'',me:null,signature:null,inboxes:[],inbox:null,view:'unassigned',viewAssignee:null,compose:null,q:'',threads:[],counts:{},members:[],open:false,
   threadId:null,detail:null,expanded:new Set(),replying:false,reply:null,listLoading:false,error:'',
   viewTag:null,sel:new Set(),tags:[],templates:[],notifs:{unread:0,items:[]},panel:null,report:null,team:null,settings:null,searchIds:[],prevView:'unassigned',menu:null};
@@ -73,6 +73,7 @@ const NAV_ICON={
   closed:'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z',
   sent:'M2.01 21 23 12 2.01 3 2 10l15 2-15 2z',
   all:'M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z',
+  trash:'M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
   overdue:'M22 5.72 17.4 1.86l-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39 6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4a9 9 0 1 0 .01 18.01A9 9 0 0 0 12 4zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
   tag:'M21.41 11.58 12.41 2.58A2 2 0 0 0 11 2H4a2 2 0 0 0-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41s-.23-1.06-.59-1.42zM5.5 7A1.5 1.5 0 1 1 7 5.5 1.5 1.5 0 0 1 5.5 7z',
   bell:'M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z',
@@ -92,7 +93,7 @@ const NAVCSS=BASE+`
 .row .n{font-size:12px;letter-spacing:.3px;margin-left:8px}
 .row .n.b{font-weight:700}
 .top{padding-left:8px}
-.top .chev{width:20px;height:20px;display:grid;place-items:center;margin-right:6px}
+.top{cursor:pointer}.top .chev{width:22px;height:22px;display:grid;place-items:center;margin-right:4px;border-radius:50%}.top .chev:hover{background:var(--hover)}
 .top .chev svg{width:18px;height:18px}
 .top .ic{margin-right:16px}
 .top .t{font-weight:500}
@@ -151,9 +152,11 @@ let navCollapsed=store.get('collapsed')==='1',teamOpen=store.get('team')==='1',t
 function renderNav(){
   const wrap=h('div',{class:'sec'+(navHost.dataset.floating?' float':'')});
   const title=S.inbox?.name||'Shared inbox';
-  wrap.append(h('button',{class:'row top',title:'Fredver · '+(S.inbox?.email||''),'aria-expanded':String(!navCollapsed),
-      onclick:()=>{navCollapsed=!navCollapsed;store.set('collapsed',navCollapsed?'1':'0');renderNav()}},
-    h('span',{class:'chev'},svg(navCollapsed?NAV_ICON.chevR:NAV_ICON.chevD)),h('span',{class:'ic'},svg(ICON.inbox)),
+  wrap.append(h('div',{class:'row top'+(S.open&&S.view==='unassigned'&&!S.threadId&&!S.panel&&!S.compose?' on':''),role:'button',tabindex:'0',title:'Open Unassigned · '+(S.inbox?.email||''),
+      onclick:()=>{if(S.signedIn&&S.inboxes.length){navCollapsed=false;store.set('collapsed','0');openView('unassigned')}else{navCollapsed=!navCollapsed;renderNav()}},
+      onkeydown:e=>{if(e.key==='Enter')e.currentTarget.click()}},
+    h('button',{class:'chev',title:navCollapsed?'Expand':'Collapse','aria-label':navCollapsed?'Expand Fredver':'Collapse Fredver','aria-expanded':String(!navCollapsed),
+      onclick:e=>{e.stopPropagation();navCollapsed=!navCollapsed;store.set('collapsed',navCollapsed?'1':'0');renderNav()}},svg(navCollapsed?NAV_ICON.chevR:NAV_ICON.chevD)),h('span',{class:'ic'},svg(ICON.inbox)),
     h('span',{class:'t'},title),h('span',{class:'brand'},'FREDVER'),
     navCollapsed&&S.counts.unassigned?h('span',{class:'n b'},S.counts.unassigned):null));
   if(navCollapsed)return nav.replaceChildren(h('style',{},NAVCSS),wrap);
@@ -167,7 +170,6 @@ function renderNav(){
     if(S.inboxes.length>1)wrap.append(h('select',{class:'inbox','aria-label':'Shared inbox',onchange:e=>{S.inbox=S.inboxes.find(i=>i.id===e.target.value);loadInbox()}},
       S.inboxes.map(i=>h('option',{value:i.id,selected:i.id===S.inbox?.id},i.name))));
     const active=(v,a=null)=>S.open&&!S.threadId&&!S.compose&&!S.panel&&S.view===v&&(v!=='assignee'||S.viewAssignee===a)&&(v!=='tag'||S.viewTag===a);
-    wrap.append(h('button',{class:'row kid'+(S.open&&S.compose?' on':''),onclick:()=>openCompose()},svg(NAV_ICON.edit),h('span',{class:'t'},'New email')));
     for(const v of ['unassigned','mine','open','pending','overdue','closed','sent','all']){
       const n=S.counts[v],show=n>0&&['unassigned','mine','pending','overdue'].includes(v);
       wrap.append(h('button',{class:'row kid'+(active(v)?' on':'')+(v==='overdue'&&n>0?' red':''),onclick:()=>openView(v)},svg(NAV_ICON[v]),h('span',{class:'t'},NAV_LABEL[v]),
@@ -190,6 +192,7 @@ function renderNav(){
           h('span',{class:'av'},initials(nm)),h('span',{class:'t'},nm+(m.id===S.me?.id?' (me)':'')),n?h('span',{class:'n'},n):null));
       }
     }
+    wrap.append(h('button',{class:'row kid'+(active('trash')?' on':''),onclick:()=>openView('trash')},svg(NAV_ICON.trash),h('span',{class:'t'},'Trash')));
     wrap.append(h('button',{class:'row kid'+(S.open&&S.panel==='scheduled'?' on':''),onclick:()=>openPanel('scheduled')},svg(NAV_ICON.pending),h('span',{class:'t'},'Scheduled'),
       S.counts.scheduled?h('span',{class:'n'},S.counts.scheduled):null));
     wrap.append(h('div',{class:'sep'}));
@@ -226,6 +229,9 @@ const MAINCSS=BASE+`
 .rowsel,.selall{width:16px;height:16px;margin:0;accent-color:var(--g);cursor:pointer}
 .bulkbar{background:var(--gl);gap:10px;flex-wrap:wrap}
 .bsel{width:auto;padding:5px 8px;font-size:13px;border-radius:16px}
+.btn.danger{color:var(--danger)}.btn.danger:hover{background:var(--dangerl)}
+.newbtn{margin-left:4px;white-space:nowrap}
+.toastbtn{color:#e9c46a;font-weight:700;margin-left:14px;padding:0}
 .toast{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);background:#1d4a3b;color:#fff;border-left:4px solid #c9a24a;padding:10px 16px;border-radius:10px;font-size:13px;box-shadow:0 4px 16px var(--shadow);z-index:10}
 .row:not(.unread){background:var(--soft)}
 .row:not(.unread) .from{font-weight:400}
@@ -253,7 +259,21 @@ const MAINCSS=BASE+`
 .msg .date{color:var(--mut);font-size:12px;white-space:nowrap}
 .msg .snip{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .msg .body{margin:12px 0 0 48px}
-.msg iframe{width:100%;border:0;min-height:40px;display:block;background:#fff;border-radius:8px}
+.msg .date{text-align:right}.msg .gap{font-size:11px;color:var(--mut);margin-top:2px}
+.cnum{display:inline-grid;place-items:center;min-width:20px;height:20px;border-radius:10px;background:var(--g);color:var(--onG);font-size:11px;font-weight:700;padding:0 5px;margin-right:6px}
+.ckind{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:6px;padding:1px 6px;margin-right:8px;background:var(--chip);color:var(--mut)}
+.ckind.forward{background:var(--goldl);color:var(--gold)}.ckind.reply{background:var(--infol);color:var(--info)}.ckind.original{background:var(--gl);color:var(--g)}
+.cpath{border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:10px;padding:8px 10px;margin:4px 0 12px;background:var(--soft)}
+.cpath-h{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:2px 4px 6px}
+.cstep{display:flex;align-items:center;gap:2px;width:100%;text-align:left;padding:5px 6px;border-radius:8px;font-size:13px}
+.cstep:hover{background:var(--hover)}.cwho{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cto{color:var(--mut);margin-left:6px;white-space:nowrap}
+.cwhen{margin-left:auto;color:var(--mut);font-size:12px;white-space:nowrap;padding-left:10px}
+.quotebtn{margin-top:6px;background:var(--chip);color:var(--mut);border-radius:8px;padding:0 10px;font-size:12px;line-height:18px;font-weight:700}
+.quotebtn:hover{background:var(--line)}
+pre.quoted{color:var(--mut);border-left:2px solid var(--line);padding-left:10px;margin-top:8px}
+.fwdbox{margin-top:12px;background:var(--goldl);border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:8px;padding:10px 12px}
+.fwdlbl{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin-bottom:6px}
+.msg iframe{width:100%;border:0;height:40px;min-height:20px;display:block;background:#fff;border-radius:8px}
 :host([data-theme=dark]) .msg iframe{padding:10px}
 .msg pre{white-space:pre-wrap;word-wrap:break-word;font:inherit;margin:0}
 .atts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0 48px}
@@ -446,10 +466,13 @@ setInterval(placeMain,500);addEventListener('resize',placeMain);
 // Clicking anything in Gmail that navigates (Inbox, a label, an email) closes the shared-inbox pane.
 addEventListener('hashchange',()=>{if(S.open)closePane()});
 // Any click in Gmail's own sidebar (labels, Hiver views, etc.) or top bar hands the screen back to Gmail.
+// Gmail's own links don't always sit inside role="navigation", so also treat any click outside the Fredver pane,
+// to its left (Gmail's sidebar) or above it (search bar), as "go back to Gmail".
 document.addEventListener('click',e=>{
   if(!S.open)return;const path=e.composedPath();
-  if(path.includes(navHost)||path.includes(mainHost))return;
-  if(e.target.closest?.('[role="navigation"],header,[role="banner"]'))closePane();
+  if(path.includes(navHost)||path.includes(mainHost)||path.includes(shareHost))return;
+  const r=mainHost.getBoundingClientRect();
+  if(e.target.closest?.('[role="navigation"],header,[role="banner"],a[href*="#"]')||e.clientX<r.left||e.clientY<r.top)closePane();
 },true);
 
 function closePane(){leaveThread();S.compose=null;S.panel=null;S.open=false;placeMain();renderNav()}
@@ -469,6 +492,7 @@ function renderMain(){
   const keep=['.list','.thread','.side'].map(sel=>[sel,main.querySelector(sel)?.scrollTop||0]);
   main.replaceChildren(h('style',{},MAINCSS),pane);
   for(const [sel,top] of keep){const e=main.querySelector(sel);if(e&&top)e.scrollTop=top}
+  if(toastEl)pane.append(toastEl);
 }
 
 function renderList(){
@@ -493,16 +517,19 @@ function renderList(){
       h('button',{class:'btn small',onclick:()=>bulk({status:'closed'},'Closed')},'✓ Close'),
       h('select',{class:'bsel','aria-label':'Tag selected',onchange:e=>{const v=e.target.value;e.target.value='';if(v)bulk({tagId:v},'Tagged '+(S.tags.find(g=>g.id===v)?.name||''))}},
         h('option',{value:''},'Add tag…'),S.tags.map(g=>h('option',{value:g.id},g.name))),
+      S.view==='trash'?h('button',{class:'btn small',onclick:()=>bulk({restore:true},'Restored')},'↩ Restore')
+        :h('button',{class:'btn ghost small danger',onclick:()=>{if(confirm(`Delete ${S.sel.size} conversation${S.sel.size>1?'s':''}? They move to Trash (Gmail deletes them for good after 30 days).`))bulk({delete:true},'Deleted')}},'🗑 Delete'),
       h('button',{class:'btn ghost small',onclick:()=>bulk({read:true},'Marked read')},'Mark read'),
       h('button',{class:'btn ghost small',onclick:()=>bulk({read:false},'Marked unread')},'Mark unread'),
       h('span',{style:'margin-left:auto'}),h('button',{class:'sp-link',onclick:()=>{S.sel.clear();renderMain()}},'Clear selection'))
-    :h('div',{class:'bar'},S.threads.length?selAll:null,h('h2',{},label),h('span',{class:'sub'},S.inbox?S.inbox.email:''),search,
+    :h('div',{class:'bar'},S.threads.length?selAll:null,h('h2',{},label),h('span',{class:'sub'},S.view==='trash'?'Deleted conversations · Gmail empties Trash after 30 days':S.inbox?S.inbox.email:''),search,
+      h('button',{class:'btn small newbtn',onclick:()=>openCompose()},'✎ New email'),
       iconBtn('refresh','Refresh',()=>{loadThreads();loadCounts()}),iconBtn('close','Close shared inbox',closePane));
   const list=h('div',{class:'list'});
   if(S.error)list.append(h('div',{class:'err'},S.error));
   if(S.listLoading&&!S.threads.length)list.append(h('div',{class:'loading'},S.view==='search'?'Searching the whole mailbox…':'Loading…'));
   else if(!S.threads.length)list.append(h('div',{class:'empty'},h('strong',{},S.q?'No matches':'Nothing here'),
-    S.q?'Try a different search.':(S.view==='unassigned'?'Every open conversation has an owner.':S.view==='sent'?'Emails your team sends from the shared inbox appear here.':'No conversations in this view.')));
+    S.q?'Try a different search.':S.view==='trash'?'Nothing in Trash.':(S.view==='unassigned'?'Every open conversation has an owner.':S.view==='sent'?'Emails your team sends from the shared inbox appear here.':'No conversations in this view.')));
   for(const t of S.threads){
     const due=slaState(t);
     const on=S.sel.has(t.id);
@@ -541,16 +568,55 @@ function slaState(t){
   return null;
 }
 
-function messageBody(m){
+// ---------- message bodies: hide repeated quoted text, show forwards clearly ----------
+const FWD_RE=/^\s*(fwd?|fw)\s*:/i,FWD_TEXT=/-{5,}\s*Forwarded message\s*-{5,}|Begin forwarded message:|-----Original Message-----/i;
+function msgKind(m,i){
+  if(FWD_RE.test(m.subject||'')||(i>0&&FWD_TEXT.test((m.text||'').slice(0,4000))&&!/^\s*re\s*:/i.test(m.subject||'')))return 'Forward';
+  return i===0?'Original':'Reply';
+}
+// Plain text: split at the first quoted part ("On … wrote:", "> " lines, "-----Original Message-----", Outlook "From:" block).
+function splitQuoted(text){
+  const lines=text.split('\n');
+  for(let i=1;i<lines.length;i++){
+    const l=lines[i],next=lines.slice(i,i+4).join('\n');
+    if(/^On .{6,200}wrote:\s*$/.test(l)||/^-----Original Message-----/.test(l)||/^>/.test(l)&&/^>/.test(lines[i+1]||'')||
+       (/^From: /.test(l)&&/\n(Sent|Date): /.test(next)))return [lines.slice(0,i).join('\n').trimEnd(),lines.slice(i).join('\n')];
+  }
+  return [text,''];
+}
+function messageBody(m,kind){
+  const wrap=h('div',{class:'mbody'});
+  const fwd=kind==='Forward';
   if(m.html){
     const f=h('iframe',{sandbox:'allow-same-origin allow-popups allow-popups-to-escape-sandbox',title:'Message from '+nameOf(m.from),referrerpolicy:'no-referrer'});
     // No allow-scripts: email HTML is displayed but nothing in it can run. CSP blocks forms, frames and plugins.
-    f.srcdoc='<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: data:; style-src \'unsafe-inline\' https:; font-src https: data:"><base target="_blank"><style>body{margin:0;font:14px/1.5 Arial,sans-serif;color:#202124;overflow-wrap:anywhere}img{max-width:100%;height:auto}blockquote{margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex}</style>'+m.html;
-    const fit=()=>{try{f.style.height=(f.contentDocument.documentElement.scrollHeight+4)+'px'}catch{}};
-    f.addEventListener('load',()=>{fit();setTimeout(fit,400);setTimeout(fit,1500)});
-    return f;
+    // Quoted earlier messages (Gmail, Outlook, Apple Mail, Yahoo) are hidden until "Show quoted text"; in a forward the
+    // forwarded original is shown in its own box instead.
+    f.srcdoc='<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src https: data:; style-src \'unsafe-inline\' https:; font-src https: data:"><base target="_blank"><style>'+
+      'body{margin:0;font:14px/1.5 Arial,sans-serif;color:#202124;overflow-wrap:anywhere}img{max-width:100%;height:auto}blockquote{margin:0 0 0 .8ex;border-left:2px solid #d5d9d7;padding-left:1ex;color:#555}'+
+      '.fv-trim .gmail_quote,.fv-trim blockquote[type=cite],.fv-trim .gmail_extra,.fv-trim #appendonsend,.fv-trim #appendonsend~*,.fv-trim #divRplyFwdMsg,.fv-trim #divRplyFwdMsg~*,.fv-trim .yahoo_quoted,.fv-trim .moz-cite-prefix,.fv-trim .moz-cite-prefix~blockquote{display:none!important}'+
+      '.fv-fwd .gmail_quote,.fv-fwd #divRplyFwdMsg{display:block;margin-top:14px;background:#faf6ea;border:1px solid #e6d7ad;border-left:4px solid #c9a24a;border-radius:8px;padding:10px 14px}'+
+      '.fv-fwd .gmail_quote:before,.fv-fwd #divRplyFwdMsg:before{content:"Forwarded message";display:block;font:700 11px Arial;letter-spacing:.08em;text-transform:uppercase;color:#8a6a1f;margin-bottom:6px}'+
+      '</style><body class="'+(fwd?'fv-fwd':'fv-trim')+'">'+m.html;
+    // Measure the content itself: the page's own height is never less than the frame's starting height.
+    const fit=()=>{try{const b=f.contentDocument.body;f.style.height=Math.ceil(Math.max(b.scrollHeight,b.getBoundingClientRect().height))+8+'px'}catch{}};
+    const tog=h('button',{class:'quotebtn',hidden:true,'aria-expanded':'false',title:'Show quoted text'},'•••');
+    tog.onclick=()=>{try{const b=f.contentDocument.body,shown=b.classList.toggle('fv-trim')===false;tog.setAttribute('aria-expanded',String(shown));tog.textContent=shown?'Hide quoted text':'•••';fit()}catch{}};
+    f.addEventListener('load',()=>{fit();setTimeout(fit,400);setTimeout(fit,1500);
+      try{if(!fwd&&f.contentDocument.querySelector('.gmail_quote,blockquote[type=cite],.gmail_extra,#appendonsend,#divRplyFwdMsg,.yahoo_quoted,.moz-cite-prefix'))tog.hidden=false}catch{}});
+    wrap.append(f,tog);return wrap;
   }
-  return h('pre',{},m.text||m.snippet||'(no content)');
+  const text=m.text||m.snippet||'(no content)';
+  if(fwd){
+    const i=text.search(FWD_TEXT);
+    if(i>0){wrap.append(h('pre',{},text.slice(0,i).trimEnd()),h('div',{class:'fwdbox'},h('div',{class:'fwdlbl'},'Forwarded message'),h('pre',{},text.slice(i).replace(FWD_TEXT,'').trim())));return wrap}
+    wrap.append(h('pre',{},text));return wrap;
+  }
+  const [top,rest]=splitQuoted(text);
+  const quoted=h('pre',{class:'quoted',hidden:true},rest);
+  wrap.append(h('pre',{},top||text));
+  if(rest){const tog=h('button',{class:'quotebtn',title:'Show quoted text','aria-expanded':'false',onclick:()=>{quoted.hidden=!quoted.hidden;tog.textContent=quoted.hidden?'•••':'Hide quoted text';tog.setAttribute('aria-expanded',String(!quoted.hidden))}},'•••');wrap.append(tog,quoted)}
+  return wrap;
 }
 
 const fmtSize=n=>!n?'':n<1024?n+' B':n<1048576?Math.round(n/1024)+' KB':(n/1048576).toFixed(1)+' MB';
@@ -618,6 +684,12 @@ function renderConversation(){
   const bar=h('div',{class:'bar'},iconBtn('back','Back to list',()=>{leaveThread();renderNav();renderMain();loadThreads()}),
     h('span',{class:'sub'},d?d.thread.inbox_name:''),h('span',{style:'margin-left:auto'}),
     d?h('button',{class:'btn ghost small',onclick:async()=>{const id=S.threadId;leaveThread();await api('/api/threads/'+id+'/unread','POST').catch(()=>{});renderNav();renderMain();loadThreads()}},'Mark unread'):null,
+    d&&!d.thread.deleted_at?h('button',{class:'btn ghost small danger',title:'Move to Trash',onclick:async()=>{
+      if(!confirm('Delete this conversation? It moves to Trash (Gmail deletes it for good after 30 days).'))return;
+      const id=S.threadId;try{await api('/api/threads/'+id+'/delete','POST')}catch(e){return alert(e.message)}
+      leaveThread();renderNav();renderMain();loadThreads();loadCounts();
+      toast('Conversation deleted',{label:'Undo',fn:async()=>{await api('/api/threads/'+id+'/restore','POST');loadThreads();loadCounts();openThread(id)}})}},'🗑 Delete'):null,
+    d&&d.thread.deleted_at?h('button',{class:'btn small',onclick:async()=>{try{await api('/api/threads/'+S.threadId+'/restore','POST');await loadDetail();loadCounts();toast('Restored')}catch(e){alert(e.message)}}},'↩ Restore'):null,
     iconBtn('close','Close shared inbox',closePane));
   if(!d)return [bar,h('div',{class:'loading'},S.error?h('div',{class:'err'},S.error):'Loading conversation…')];
   const t=d.thread,mailbox=t.inbox_email.toLowerCase();
@@ -631,18 +703,32 @@ function renderConversation(){
         try{const id=S.threadId;leaveThread();await api('/api/threads/'+id+'/share','DELETE');shareCache.clear();loadCounts();renderNav();renderMain();loadThreads()}catch(e){alert(e.message)}}},'Remove from shared inbox'):null));
   }
   th.append(h('div',{id:'banner'}));
+  const kinds=d.messages.map((m,i)=>msgKind(m,i));
+  const gap=(i)=>i?dur(new Date(d.messages[i].date)-new Date(d.messages[i-1].date)):'';
+  if(d.messages.length>1){
+    const path=h('div',{class:'cpath'},h('div',{class:'cpath-h'},`Conversation path · ${d.messages.length} messages`));
+    d.messages.forEach((m,i)=>{
+      const sent=d.sentBy?.[m.id]||d.sentBy?.[m.rfcId];
+      path.append(h('button',{class:'cstep',onclick:()=>{S.expanded.add(m.id);renderMain();setTimeout(()=>main.getElementById('msg-'+m.id)?.scrollIntoView({behavior:'smooth',block:'start'}),50)}},
+        h('span',{class:'cnum'},i+1),h('span',{class:'ckind '+kinds[i].toLowerCase()},kinds[i]),
+        h('span',{class:'cwho'},nameOf(m.from)+(sent?' ('+sent+')':'')),
+        kinds[i]==='Forward'&&m.to?h('span',{class:'cto'},'→ '+nameOf(m.to.split(',')[0])):null,
+        h('span',{class:'cwhen',title:full(m.date)},fmtWhen(m.date)+(i?' · +'+gap(i):''))));
+    });
+    th.append(path);
+  }
   d.messages.forEach((m,i)=>{
     const last=i===d.messages.length-1,open=last||S.expanded.has(m.id);
     const us=(m.from||'').toLowerCase().includes(mailbox);
-    const card=h('div',{class:'msg'});
+    const card=h('div',{class:'msg',id:'msg-'+m.id});
     card.append(h('div',{class:'head',onclick:()=>{if(last)return;S.expanded.has(m.id)?S.expanded.delete(m.id):S.expanded.add(m.id);renderMain()}},
       h('div',{class:'bigav'+(us?' us':'')},initials(nameOf(m.from))),
-      h('div',{class:'who'},h('b',{},nameOf(m.from)),' ',h('small',{},(m.from.match(/<([^>]+)>/)||[])[1]||''),
+      h('div',{class:'who'},h('span',{class:'cnum'},i+1),h('span',{class:'ckind '+kinds[i].toLowerCase()},kinds[i]),h('b',{},nameOf(m.from)),' ',h('small',{},(m.from.match(/<([^>]+)>/)||[])[1]||''),
         (d.sentBy?.[m.id]||d.sentBy?.[m.rfcId])?h('span',{class:'chip',style:'margin-left:6px'},'Sent by '+(d.sentBy[m.id]||d.sentBy[m.rfcId])):null,
         open?h('div',{class:'to'},'to '+[m.to,m.cc].filter(Boolean).join(', ')):h('div',{class:'snip'},m.snippet)),
-      h('div',{class:'date',title:full(m.date)},when(m.date))));
+      h('div',{class:'date',title:full(m.date)},fmtWhen(m.date),i?h('div',{class:'gap'},'+'+gap(i)+' later'):null)));
     if(open){
-      card.append(h('div',{class:'body'},messageBody(m)));
+      card.append(h('div',{class:'body'},messageBody(m,kinds[i])));
       if(m.attachments?.length)card.append(attachmentCards(m));
     }
     th.append(card);
@@ -940,6 +1026,8 @@ function describe(a){
   if(a.action==='forward.sent')return `${who} forwarded to ${(m.to||[]).join(', ')}`;
   if(a.action==='compose.sent')return `${who} started this conversation`;
   if(a.action==='thread.reopened')return 'Reopened by a new client message';
+  if(a.action==='thread.deleted')return `${who} deleted this conversation`;
+  if(a.action==='thread.restored')return m.reason?'Restored by a new client message':`${who} restored this conversation`;
   if(a.action==='rule.applied')return `Rule “${m.rule}” applied`;
   if(a.action==='thread.due')return m.to?`${who} set the due date to ${fmtWhen(m.to)}`:`${who} cleared the due date`;
   if(a.action==='reply.scheduled')return `${who} scheduled a reply for ${fmtWhen(m.sendAt)}`;
@@ -1127,7 +1215,14 @@ async function loadPanel(){
   renderMain();
 }
 
-function toast(msg){const t=h('div',{class:'toast',role:'status'},msg);main.querySelector('.pane')?.append(t);setTimeout(()=>t.remove(),3000)}
+// The toast survives redraws (renderMain re-attaches it) so "Undo" stays clickable for 8 seconds.
+let toastEl=null;
+function toast(msg,action){
+  toastEl?.remove();
+  const t=h('div',{class:'toast',role:'status'},msg,action?h('button',{class:'toastbtn',onclick:()=>{t.remove();toastEl=null;action.fn()}},action.label):null);
+  toastEl=t;main.querySelector('.pane')?.append(t);
+  setTimeout(()=>{if(toastEl===t){t.remove();toastEl=null}},action?8000:3000);
+}
 
 function renderBanner(viewers){
   const b=main.getElementById('banner');if(!b)return;
